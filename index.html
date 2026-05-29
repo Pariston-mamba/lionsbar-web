@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>獅子酒吧</title>
+<style>
+body {
+    margin: 0;
+    font-family: sans-serif;
+    background: #111;
+    color: white;
+    padding: 12px;
+}
+
+.container {
+    max-width: 700px;
+    margin: auto;
+}
+
+.card {
+    background: #222;
+    border-radius: 14px;
+    padding: 14px;
+    margin-bottom: 12px;
+}
+
+button {
+    min-height: 52px;
+    padding: 12px;
+    border: none;
+    border-radius: 12px;
+    font-size: 18px;
+    margin: 4px;
+    cursor: pointer;
+    width: 100%;
+}
+
+.primary { background: #f4b400; color: black; }
+.danger { background: #d93025; color: white; }
+.secondary { background: #444; color: white; }
+
+.hand {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.cardBtn {
+    flex: 1;
+    min-width: 80px;
+}
+
+.selected {
+    outline: 3px solid #00ff88;
+}
+
+.player {
+    padding: 8px;
+    border-bottom: 1px solid #333;
+}
+
+.log {
+    max-height: 200px;
+    overflow-y: auto;
+    font-size: 14px;
+}
+
+input {
+    width: 100%;
+    padding: 12px;
+    margin-bottom: 8px;
+    border-radius: 10px;
+    border: none;
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+
+<div class="card" id="joinScreen">
+    <h2>獅子酒吧</h2>
+    <input id="nameInput" placeholder="你的名字">
+    <input id="roomInput" placeholder="房號 (留空自動建立)">
+    <button class="primary" onclick="connect()">進入</button>
+</div>
+
+<div id="gameScreen" style="display:none;">
+
+<div class="card">
+    <div id="roomInfo"></div>
+    <div id="turnInfo"></div>
+    <div id="rankInfo"></div>
+</div>
+
+<div class="card">
+    <h3>玩家</h3>
+    <div id="players"></div>
+</div>
+
+<div class="card">
+    <h3>你的手牌</h3>
+    <div class="hand" id="hand"></div>
+</div>
+
+<div class="card">
+    <button class="primary" onclick="play()">出牌</button>
+    <button class="danger" onclick="doubt()">質疑</button>
+    <button class="secondary" onclick="passTurn()">Pass</button>
+    <button class="secondary" onclick="startGame()">開始遊戲</button>
+</div>
+
+<div class="card">
+    <h3>紀錄</h3>
+    <div class="log" id="log"></div>
+</div>
+
+</div>
+</div>
+
+<script>
+let socket;
+let selected = [];
+let myHand = [];
+let myPid = localStorage.getItem("pid") || Math.random().toString(36).slice(2);
+
+localStorage.setItem("pid", myPid);
+
+function connect() {
+    const name = document.getElementById("nameInput").value || "玩家";
+    let room = document.getElementById("roomInput").value;
+
+    if (!room) {
+        room = Math.random().toString(36).substring(2,6).toUpperCase();
+    }
+
+    localStorage.setItem("room", room);
+
+    const protocol = location.protocol === "https:" ? "wss" : "ws";
+    socket = new WebSocket(`${protocol}://${location.host}/ws/${room}/${myPid}/${encodeURIComponent(name)}`);
+
+    socket.onopen = () => {
+        document.getElementById("joinScreen").style.display = "none";
+        document.getElementById("gameScreen").style.display = "block";
+    };
+
+    socket.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === "state") {
+            renderState(msg.state, msg.your_hand);
+        }
+
+        if (msg.type === "error") {
+            alert(msg.msg);
+        }
+
+        if (msg.type === "reveal") {
+            alert(
+                `${msg.loser_name} 失敗！\n實際牌: ${msg.actual_cards.join(", ")}`
+            );
+        }
+    };
+
+    socket.onclose = () => {
+        setTimeout(connect, 2000);
+    };
+}
+
+function renderState(state, hand) {
+    myHand = hand;
+
+    document.getElementById("roomInfo").innerText = `房間: ${state.room_id}`;
+    document.getElementById("turnInfo").innerText = `輪到: ${state.current_name || "-"}`;
+    document.getElementById("rankInfo").innerText = `本輪牌型: ${state.table_rank}`;
+
+    const playersDiv = document.getElementById("players");
+    playersDiv.innerHTML = "";
+
+    state.players.forEach(p => {
+        playersDiv.innerHTML += `
+            <div class="player">
+                ${p.name} ❤️${p.hp} (${p.card_count}張)
+            </div>
+        `;
+    });
+
+    const handDiv = document.getElementById("hand");
+    handDiv.innerHTML = "";
+
+    hand.forEach((card, i) => {
+        const btn = document.createElement("button");
+        btn.className = "cardBtn secondary";
+        btn.innerText = card;
+
+        if (selected.includes(i)) btn.classList.add("selected");
+
+        btn.onclick = () => toggleCard(i);
+
+        handDiv.appendChild(btn);
+    });
+
+    document.getElementById("log").innerHTML =
+        state.log.map(l => `<div>${l}</div>`).join("");
+}
+
+function toggleCard(i) {
+    if (selected.includes(i)) {
+        selected = selected.filter(x => x !== i);
+    } else {
+        if (selected.length < 3) selected.push(i);
+    }
+
+    renderState(lastState, myHand);
+}
+
+let lastState = {};
+
+function send(action, extra = {}) {
+    socket.send(JSON.stringify({ action, ...extra }));
+}
+
+function play() {
+    send("play", { indices: selected });
+    selected = [];
+}
+
+function doubt() {
+    send("doubt");
+}
+
+function passTurn() {
+    send("pass");
+}
+
+function startGame() {
+    send("start");
+}
+
+const oldRender = renderState;
+renderState = function(state, hand){
+    lastState = state;
+    oldRender(state, hand);
+};
+</script>
+
+</body>
+</html>
