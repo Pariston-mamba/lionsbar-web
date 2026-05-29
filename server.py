@@ -3,61 +3,61 @@ from fastapi.responses import FileResponse
 import uvicorn
 import os
 import json
-import random
+import uuid
+from game import GameSession
 
 app = FastAPI()
+
 rooms = {}
-
-
-class Player:
-    def __init__(self, name, ws):
-        self.name = name
-        self.ws = ws
-        self.hand = []
-        self.hp = 3
+connections = {}
 
 
 class Room:
-    def __init__(self):
-        self.players = []
-        self.turn = 0
-        self.started = False
-        self.last_play = None
-        self.deck = ["A", "K", "Q"] * 6
+    def __init__(self, room_id):
+        self.room_id = room_id
+        self.game = GameSession(room_id)
+        self.clients = {}  # player_id -> websocket
 
-    def deal(self):
-        random.shuffle(self.deck)
-        for p in self.players:
-            p.hand = [self.deck.pop() for _ in range(3)]
-
-    async def broadcast(self, msg):
+    async def broadcast_log(self, msg):
         dead = []
 
-        for p in self.players:
+        for pid, ws in self.clients.items():
             try:
-                await p.ws.send_text(json.dumps(msg))
+                await ws.send_text(json.dumps({
+                    "type": "log",
+                    "msg": msg
+                }))
             except:
-                dead.append(p)
+                dead.append(pid)
 
-        for p in dead:
-            self.players.remove(p)
+        for pid in dead:
+            self.remove_player(pid)
 
-    async def send_state(self):
-        for i, p in enumerate(self.players):
-            await p.ws.send_text(json.dumps({
-                "type": "state",
-                "your_hand": p.hand,
-                "your_hp": p.hp,
-                "turn": self.players[self.turn].name,
-                "players": [
-                    {
-                        "name": x.name,
-                        "hp": x.hp,
-                        "cards": len(x.hand)
-                    }
-                    for x in self.players
-                ]
-            }))
+    async def sync_state(self):
+        dead = []
+
+        for pid, ws in self.clients.items():
+            try:
+                state = self.game.get_state_for(pid)
+
+                await ws.send_text(json.dumps({
+                    "type": "state",
+                    **state
+                }))
+            except:
+                dead.append(pid)
+
+        for pid in dead:
+            self.remove_player(pid)
+
+    def remove_player(self, player_id):
+        if player_id in self.clients:
+            del self.clients[player_id]
+
+        self.game.players = [
+            p for p in self.game.players
+            if p.player_id != player_id
+        ]
 
 
 @app.get("/")
@@ -66,85 +66,111 @@ async def root():
 
 
 @app.get("/app.js")
-async def js():
+async def app_js():
     return FileResponse("static/app.js")
 
 
 @app.websocket("/ws/{room_id}")
-async def ws(websocket: WebSocket, room_id: str):
+async def websocket_endpoint(websocket: WebSocket, room_id: str):
     await websocket.accept()
 
     if room_id not in rooms:
-        rooms[room_id] = Room()
+        rooms[room_id] = Room(room_id)
 
     room = rooms[room_id]
-    player = None
+    player_id = None
 
     try:
         while True:
             data = json.loads(await websocket.receive_text())
+            action = data["type"]
 
-            if data["type"] == "join":
-                player = Player(data["name"], websocket)
-                room.players.append(player)
+            if action == "join":
+                name = data["name"].strip()
 
-                await room.broadcast({
-                    "type": "log",
-                    "msg": f"{player.name} 加入房间"
-                })
-
-            elif data["type"] == "start":
-                room.started = True
-                room.deal()
-                await room.broadcast({
-                    "type": "log",
-                    "msg": "游戏开始"
-                })
-                await room.send_state()
-
-            elif data["type"] == "play":
-                if room.players[room.turn] != player:
+                if not name:
                     continue
 
-                card = data["card"]
+                # 防止同名重复加入
+                existing = next(
+                    (p for p in room.game.players if p.display_name == name),
+                    None
+                )
 
-                if card in player.hand:
-                    player.hand.remove(card)
+                if existing:
+                    player_id = existing.player_id
+                    room.clients[player_id] = websocket
+                else:
+                    player_id = str(uuid.uuid4())
 
-                    room.last_play = {
-                        "player": player,
-                        "card": card
-                    }
+                    ok, msg = room.game.add_player(player_id, name)
 
-                    await room.broadcast({
-                        "type": "log",
-                        "msg": f"{player.name} 出了一张牌"
-                    })
+                    if not ok:
+                        await websocket.send_text(json.dumps({
+                            "type": "error",
+                            "msg": msg
+                        }))
+                        continue
 
-                    room.turn = (room.turn + 1) % len(room.players)
-                    await room.send_state()
+                    room.clients[player_id] = websocket
 
-            elif data["type"] == "challenge":
-                if room.last_play:
-                    liar = random.choice([True, False])
+                connections[websocket] = player_id
 
-                    if liar:
-                        room.last_play["player"].hp -= 1
-                        msg = f"{room.last_play['player'].name} 被抓包！扣1血"
-                    else:
-                        player.hp -= 1
-                        msg = f"{player.name} 质疑失败！扣1血"
+                await room.broadcast_log(f"{name} 加入房间")
+                await room.sync_state()
 
-                    await room.broadcast({
-                        "type": "log",
-                        "msg": msg
-                    })
+            elif action == "start":
+                ok, msg = room.game.start_game()
 
-                    await room.send_state()
+                await room.broadcast_log(msg)
+                await room.sync_state()
+
+            elif action == "play":
+                if not player_id:
+                    continue
+
+                card_index = data["index"]
+
+                ok, msg = room.game.play_cards(
+                    player_id,
+                    [card_index]
+                )
+
+                await room.broadcast_log(msg)
+                await room.sync_state()
+
+            elif action == "challenge":
+                if not room.game.last_claim:
+                    continue
+
+                liar = room.game.check_lie()
+
+                if liar:
+                    room.game.apply_damage(
+                        room.game.last_claim.player_id
+                    )
+                    await room.broadcast_log("抓包成功！")
+                else:
+                    room.game.apply_damage(player_id)
+                    await room.broadcast_log("质疑失败！")
+
+                winner = room.game.check_winner()
+
+                if winner:
+                    await room.broadcast_log(
+                        f"{winner.display_name} 胜利！"
+                    )
+                else:
+                    room.game.reset_round()
+
+                await room.sync_state()
 
     except WebSocketDisconnect:
-        if player and player in room.players:
-            room.players.remove(player)
+        if player_id:
+            room.remove_player(player_id)
+
+        if not room.clients:
+            del rooms[room_id]
 
 
 if __name__ == "__main__":
