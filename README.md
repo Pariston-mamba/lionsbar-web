@@ -1,17 +1,17 @@
-# 獅子酒吧 Web版
+# 狮子酒吧 Web版
 
-Discord 機器人移植成 WebSocket 多人連線卡牌遊戲。
+Discord 机器人移植成 WebSocket 多人连线卡牌游戏。
 
-## 技術
+## 技术
 
 - Python
 - FastAPI
 - WebSocket
 - Railway
 
-## 本地啟動
+## 本地启动
 
-安裝依賴：
+安装依赖：
 
 ```bash
 pip install -r requirements.txt
