@@ -1,14 +1,24 @@
-let ws;
+let ws = null;
+let joined = false;
 
 function log(msg){
-    document.getElementById("log").innerHTML += `<div>${msg}</div>`;
+    const logDiv = document.getElementById("log");
+    logDiv.innerHTML += `<div>${msg}</div>`;
 }
 
 function join(){
-    const room = document.getElementById("room").value;
-    const name = document.getElementById("name").value;
+    if(joined) return;
+
+    const room = document.getElementById("room").value.trim();
+    const name = document.getElementById("name").value.trim();
+
+    if(!room || !name){
+        alert("請輸入房號與名字");
+        return;
+    }
 
     const protocol = location.protocol === "https:" ? "wss" : "ws";
+
     ws = new WebSocket(`${protocol}://${location.host}/ws/${room}`);
 
     ws.onopen = ()=>{
@@ -16,6 +26,9 @@ function join(){
             type:"join",
             name:name
         }));
+
+        joined = true;
+        document.querySelector("button").disabled = true;
     };
 
     ws.onmessage = (e)=>{
@@ -28,17 +41,27 @@ function join(){
         if(data.type==="state"){
             renderState(data);
         }
+
+        if(data.type==="error"){
+            alert(data.msg);
+        }
+    };
+
+    ws.onclose = ()=>{
+        joined = false;
     };
 }
 
 function startGame(){
-    ws.send(JSON.stringify({type:"start"}));
+    if(ws){
+        ws.send(JSON.stringify({type:"start"}));
+    }
 }
 
-function play(card){
+function play(index){
     ws.send(JSON.stringify({
         type:"play",
-        card:card
+        index:index
     }));
 }
 
@@ -50,12 +73,12 @@ function challenge(){
 
 function renderState(data){
     document.getElementById("players").innerHTML =
-        data.players.map(p =>
-            `${p.name} ❤️${p.hp} (${p.cards}张)`
+        data.players.map(
+            p => `${p.name} ❤️${p.hp} (${p.cards})`
         ).join("<br>");
 
     document.getElementById("hand").innerHTML =
-        data.your_hand.map(c =>
-            `<button onclick="play('${c}')">${c}</button>`
+        data.your_hand.map(
+            (c,i)=>`<button onclick="play(${i})">${c}</button>`
         ).join("");
 }
