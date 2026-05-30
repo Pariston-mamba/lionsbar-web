@@ -1,4 +1,5 @@
 import asyncio
+import json
 import secrets
 import string
 import time
@@ -6,8 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -43,10 +44,15 @@ class CreateRoomRequest(BaseModel):
     name: str | None = None
 
 
-@dataclass
-class ClientSocket:
-    websocket: WebSocket
+class JoinRequest(BaseModel):
     token: str
+    name: str
+
+
+class ActionRequest(BaseModel):
+    token: str
+    type: str
+    indices: list[int] | None = None
 
 
 @dataclass
@@ -58,7 +64,7 @@ class WebRoom:
     owner_token: str | None = None
     token_to_player_id: dict[str, int] = field(default_factory=dict)
     player_id_to_token: dict[int, str] = field(default_factory=dict)
-    connections: dict[str, set[WebSocket]] = field(default_factory=dict)
+    connections: dict[str, set[asyncio.Queue]] = field(default_factory=dict)
     log: list[dict[str, Any]] = field(default_factory=list)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     created_at: float = field(default_factory=time.time)
@@ -68,7 +74,7 @@ class WebRoom:
         self.last_seen_at = time.time()
 
     def connected_tokens(self) -> set[str]:
-        return {token for token, sockets in self.connections.items() if sockets}
+        return {token for token, queues in self.connections.items() if queues}
 
     def add_log(self, text: str, kind: str = "info", data: dict[str, Any] | None = None):
         self.log.append(
@@ -113,64 +119,97 @@ async def create_room(_: CreateRoomRequest):
         return {"code": code, "url": f"/?room={code}"}
 
 
-@app.websocket("/ws/{room_code}")
-async def websocket_room(websocket: WebSocket, room_code: str):
+@app.post("/api/rooms/{room_code}/join")
+async def join_room_endpoint(room_code: str, body: JoinRequest):
     code = normalize_room_code(room_code)
-    await websocket.accept()
-
     room = rooms.get(code)
     if not room:
-        await websocket.send_json({"type": "error", "message": ERROR_TEXT["bad_room"]})
-        await websocket.close(code=4404)
-        return
+        raise HTTPException(404, detail=ERROR_TEXT["bad_room"])
 
-    token: str | None = None
-    try:
-        first = await websocket.receive_json()
-        if first.get("type") != "join":
-            await websocket.send_json({"type": "error", "message": "连接格式错误。"})
-            await websocket.close(code=4400)
-            return
+    token = normalize_token(body.token)
+    name = normalize_name(body.name)
+    if not token:
+        raise HTTPException(400, detail=ERROR_TEXT["bad_token"])
+    if not name:
+        raise HTTPException(400, detail=ERROR_TEXT["bad_name"])
 
-        token = normalize_token(first.get("token"))
-        name = normalize_name(first.get("name"))
-        if not token:
-            await websocket.send_json({"type": "error", "message": ERROR_TEXT["bad_token"]})
-            await websocket.close(code=4401)
-            return
-        if not name:
-            await websocket.send_json({"type": "error", "message": ERROR_TEXT["bad_name"]})
-            await websocket.close(code=4400)
-            return
+    async with room.lock:
+        ok, message = do_join_room(room, token, name)
+        if not ok:
+            raise HTTPException(409, detail=message)
+        room.touch()
 
-        async with room.lock:
-            ok, message = join_room(room, token, name)
-            if not ok:
-                await websocket.send_json({"type": "error", "message": message})
-                await websocket.close(code=4409)
-                return
-            room.connections.setdefault(token, set()).add(websocket)
-            room.touch()
+    await broadcast_state(room)
+    return {"ok": True}
 
-        await broadcast_state(room)
 
-        while True:
-            payload = await websocket.receive_json()
-            result_message = await handle_action(room, token, payload)
-            if result_message:
-                await websocket.send_json({"type": "toast", "message": result_message})
-            await broadcast_state(room)
+@app.post("/api/rooms/{room_code}/action")
+async def action_endpoint(room_code: str, body: ActionRequest):
+    code = normalize_room_code(room_code)
+    room = rooms.get(code)
+    if not room:
+        raise HTTPException(404, detail=ERROR_TEXT["bad_room"])
 
-    except WebSocketDisconnect:
-        pass
-    finally:
-        if token:
+    token = normalize_token(body.token)
+    if not token:
+        raise HTTPException(400, detail=ERROR_TEXT["bad_token"])
+
+    payload: dict[str, Any] = {"type": body.type}
+    if body.indices is not None:
+        payload["indices"] = body.indices
+
+    error_message = await handle_action(room, token, payload)
+    await broadcast_state(room)
+
+    if error_message:
+        return {"ok": False, "message": error_message}
+    return {"ok": True}
+
+
+@app.get("/api/rooms/{room_code}/events")
+async def sse_events(room_code: str, token: str):
+    code = normalize_room_code(room_code)
+    room = rooms.get(code)
+    if not room:
+        raise HTTPException(404, detail=ERROR_TEXT["bad_room"])
+
+    clean_token = normalize_token(token)
+    if not clean_token or clean_token not in room.token_to_player_id:
+        raise HTTPException(401, detail=ERROR_TEXT["bad_token"])
+
+    queue: asyncio.Queue = asyncio.Queue()
+    async with room.lock:
+        room.connections.setdefault(clean_token, set()).add(queue)
+        room.touch()
+
+    await broadcast_state(room)
+
+    async def event_generator():
+        try:
+            while True:
+                try:
+                    data = await asyncio.wait_for(queue.get(), timeout=20.0)
+                    yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    room.touch()
+                    yield ": keepalive\n\n"
+        finally:
             async with room.lock:
-                sockets = room.connections.get(token)
-                if sockets and websocket in sockets:
-                    sockets.remove(websocket)
+                queues = room.connections.get(clean_token)
+                if queues and queue in queues:
+                    queues.remove(queue)
                 room.touch()
             await broadcast_state(room)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 def make_room_code() -> str:
@@ -203,7 +242,7 @@ def new_player_id(room: WebRoom) -> int:
     return player_id
 
 
-def join_room(room: WebRoom, token: str, name: str) -> tuple[bool, str]:
+def do_join_room(room: WebRoom, token: str, name: str) -> tuple[bool, str]:
     if token in room.token_to_player_id:
         player = room.session.get_player(room.token_to_player_id[token])
         if player and room.session.state == GameState.WAITING:
@@ -408,20 +447,13 @@ def handle_rematch(room: WebRoom) -> str | None:
 
 
 async def broadcast_state(room: WebRoom):
-    dead: list[tuple[str, WebSocket]] = []
-    for token, sockets in list(room.connections.items()):
-        for websocket in list(sockets):
+    for token, queues in list(room.connections.items()):
+        state = build_state(room, token)
+        for queue in list(queues):
             try:
-                await websocket.send_json(build_state(room, token))
-            except RuntimeError:
-                dead.append((token, websocket))
+                await queue.put(state)
             except Exception:
-                dead.append((token, websocket))
-
-    if dead:
-        async with room.lock:
-            for token, websocket in dead:
-                room.connections.get(token, set()).discard(websocket)
+                pass
 
 
 def build_state(room: WebRoom, token: str) -> dict[str, Any]:
