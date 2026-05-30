@@ -78,7 +78,7 @@ class GameSession:
         return [p for p in self.players if p.is_alive and len(p.hand) > 0]
 
     def build_deck(self) -> list[str]:
-        deck = TABLE_RANKS * 8 + [JOKER, JOKER]
+        deck = TABLE_RANKS * 9 + [JOKER, JOKER, JOKER]
         random.shuffle(deck)
         return deck
 
