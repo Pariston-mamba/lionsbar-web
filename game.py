@@ -12,6 +12,15 @@ TABLE_RANKS = ["A", "K", "Q"]
 JOKER = "Joker"
 RANKS = TABLE_RANKS + [JOKER]
 
+# Player count -> (copies of each A/K/Q rank, Joker count)
+DECK_CONFIG_BY_PLAYER_COUNT = {
+    2: (3, 1),  # 3 * 3 + 1 = 10
+    3: (4, 3),  # 3 * 4 + 3 = 15
+    4: (6, 2),  # 3 * 6 + 2 = 20
+    5: (7, 4),  # 3 * 7 + 4 = 25
+    6: (9, 3),  # 3 * 9 + 3 = 30
+}
+
 
 class GameState(Enum):
     WAITING = "waiting"
@@ -78,13 +87,35 @@ class GameSession:
         return [p for p in self.players if p.is_alive and len(p.hand) > 0]
 
     def build_deck(self) -> list[str]:
-        deck = TABLE_RANKS * 9 + [JOKER, JOKER, JOKER]
+        """Build a deck based on the current number of alive players."""
+        alive_count = len(self.alive_players())
+
+        if alive_count not in DECK_CONFIG_BY_PLAYER_COUNT:
+            raise ValueError(f"Unsupported player count for deck: {alive_count}")
+
+        base_cards, joker_count = DECK_CONFIG_BY_PLAYER_COUNT[alive_count]
+
+        deck = []
+        for rank in TABLE_RANKS:
+            deck.extend([rank] * base_cards)
+
+        deck.extend([JOKER] * joker_count)
         random.shuffle(deck)
         return deck
 
     def deal_cards(self):
+        """Rebuild the deck each round and deal cards to alive players."""
+        alive_players = self.alive_players()
+        needed = len(alive_players) * HAND_SIZE
+
         self.deck = self.build_deck()
-        for player in self.alive_players():
+
+        if len(self.deck) < needed:
+            raise ValueError(
+                f"Deck has {len(self.deck)} cards, but {needed} cards are needed"
+            )
+
+        for player in alive_players:
             player.hand = [self.deck.pop() for _ in range(HAND_SIZE)]
 
     def start_game(self) -> tuple[bool, str]:
