@@ -29,11 +29,13 @@ const els = {
   toast: document.querySelector("#toast"),
 };
 
-let es = null;
+let ws = null;
 let roomCode = new URLSearchParams(location.search).get("room") || "";
 let currentState = null;
 let selected = new Set();
+let reconnectTimer = null;
 let heartbeatTimer = null;
+let manualClose = false;
 
 const storage = {
   token: "lionsbar_token",
@@ -106,7 +108,7 @@ async function createRoom() {
   }
 }
 
-async function connect() {
+function connect() {
   const name = els.nameInput.value.trim();
   if (!name) {
     showToast("请输入名字。");
@@ -114,45 +116,20 @@ async function connect() {
   }
 
   localStorage.setItem(storage.name, name);
+  manualClose = false;
   selected.clear();
   setStatus("连接中", "");
-  els.enterRoomBtn.disabled = true;
 
-  try {
-    const res = await fetch(`/api/rooms/${roomCode}/join`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: token(), name }),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.detail || "加入房间失败");
-    }
-    openSSE();
-  } catch (err) {
-    showToast(err.message);
-    setStatus("未连接");
-    els.enterRoomBtn.disabled = false;
-  }
-}
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(`${protocol}//${location.host}/ws/${roomCode}`);
 
-function openSSE() {
-  if (es) {
-    es.close();
-    es = null;
-  }
-  stopHeartbeat();
-
-  const url = `/api/rooms/${roomCode}/events?token=${encodeURIComponent(token())}`;
-  es = new EventSource(url);
-
-  es.onopen = () => {
+  ws.addEventListener("open", () => {
     setStatus("已连接", "online");
-    els.enterRoomBtn.disabled = false;
+    send({ type: "join", token: token(), name });
     startHeartbeat();
-  };
+  });
 
-  es.onmessage = (event) => {
+  ws.addEventListener("message", (event) => {
     const msg = JSON.parse(event.data);
     if (msg.type === "state") {
       currentState = msg;
@@ -160,12 +137,24 @@ function openSSE() {
     } else if (msg.type === "toast" || msg.type === "error") {
       showToast(msg.message);
     }
-  };
+  });
 
-  es.onerror = () => {
+  ws.addEventListener("close", () => {
+    stopHeartbeat();
     setStatus("重连中", "offline");
-    // EventSource 会自动重连，无需手动处理
-  };
+    if (!manualClose) scheduleReconnect();
+  });
+
+  ws.addEventListener("error", () => {
+    setStatus("连接异常", "offline");
+  });
+}
+
+function scheduleReconnect() {
+  window.clearTimeout(reconnectTimer);
+  reconnectTimer = window.setTimeout(() => {
+    if (roomCode && localStorage.getItem(storage.name)) connect();
+  }, 1600);
 }
 
 function startHeartbeat() {
@@ -178,20 +167,11 @@ function stopHeartbeat() {
 }
 
 function send(payload) {
-  fetch(`/api/rooms/${roomCode}/action`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, token: token() }),
-  })
-    .then((res) => res.json())
-    .then((data) => {
-      if (!data.ok && data.message) {
-        showToast(data.message);
-      }
-    })
-    .catch(() => {
-      showToast("操作失败，请稍后重试。");
-    });
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    showToast("连接尚未恢复，请稍等。");
+    return;
+  }
+  ws.send(JSON.stringify(payload));
 }
 
 function render(state) {
