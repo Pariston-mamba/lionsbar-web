@@ -38,6 +38,9 @@ ERROR_TEXT = {
     "bad_name": "请输入 1 到 16 个字符的名字。",
     "bad_token": "连接身份无效，请刷新页面重试。",
     "nothing_to_challenge": "现在没有可以质疑的出牌。",
+    "owner_only": "只有房主可以执行这个操作。",
+    "cannot_remove_owner": "房主不能移除自己，请使用退出。",
+    "bad_target": "找不到这名玩家。",
 }
 
 
@@ -58,6 +61,7 @@ class WebRoom:
     phase: str = "lobby"
     allow_pass: bool = False
     owner_token: str | None = None
+    winner_name: str | None = None
     token_to_player_id: dict[str, int] = field(default_factory=dict)
     player_id_to_token: dict[int, str] = field(default_factory=dict)
     connections: dict[str, set[WebSocket]] = field(default_factory=dict)
@@ -184,6 +188,10 @@ async def websocket_room(websocket: WebSocket, room_code: str):
         while True:
             payload = await websocket.receive_json()
             result_message = await handle_action(room, token, payload)
+            if isinstance(result_message, dict):
+                if result_message.get("skip_broadcast"):
+                    continue
+                result_message = result_message.get("message")
             if result_message:
                 await websocket.send_json({"type": "toast", "message": result_message})
             await broadcast_state(room)
@@ -233,8 +241,9 @@ def new_player_id(room: WebRoom) -> int:
 def join_room(room: WebRoom, token: str, name: str) -> tuple[bool, str]:
     if token in room.token_to_player_id:
         player = room.session.get_player(room.token_to_player_id[token])
-        if player and room.session.state == GameState.WAITING:
+        if player and room.session.state != GameState.PLAYING:
             player.display_name = name
+        ensure_owner(room)
         return True, "reconnected"
 
     player_id = new_player_id(room)
@@ -247,10 +256,143 @@ def join_room(room: WebRoom, token: str, name: str) -> tuple[bool, str]:
     if not room.owner_token:
         room.owner_token = token
     room.add_log(f"{name} 加入了房间。", "join")
+    ensure_owner(room)
     return True, "joined"
 
 
-async def handle_action(room: WebRoom, token: str, payload: dict[str, Any]) -> str | None:
+def ensure_owner(room: WebRoom):
+    if room.owner_token in room.token_to_player_id:
+        return
+
+    connected = room.connected_tokens()
+    candidates = list(room.token_to_player_id.items())
+
+    for candidate_token, player_id in candidates:
+        player = room.session.get_player(player_id)
+        if player and player.is_alive and candidate_token in connected:
+            room.owner_token = candidate_token
+            return
+
+    for candidate_token, _ in candidates:
+        if candidate_token in connected:
+            room.owner_token = candidate_token
+            return
+
+    room.owner_token = candidates[0][0] if candidates else None
+
+
+def is_owner(room: WebRoom, token: str) -> bool:
+    ensure_owner(room)
+    return bool(room.owner_token and room.owner_token == token)
+
+
+def remove_player_from_room(room: WebRoom, target_token: str, reason: str) -> tuple[bool, str]:
+    player_id = room.token_to_player_id.get(target_token)
+    player = room.session.get_player(player_id) if player_id else None
+    if not player:
+        return False, ERROR_TEXT["bad_target"]
+
+    was_owner = room.owner_token == target_token
+    was_current = (
+        room.session.players
+        and room.session.state == GameState.PLAYING
+        and room.session.get_current_player().discord_id == player_id
+    )
+    name = player.display_name
+
+    room.token_to_player_id.pop(target_token, None)
+    room.player_id_to_token.pop(player_id, None)
+
+    if room.session.state == GameState.PLAYING:
+        player.is_alive = False
+        player.hand = []
+        if room.session.last_claim and room.session.last_claim.player_id == player_id:
+            room.session.last_claim = None
+            room.session.table_cards = []
+            room.phase = "play"
+            room.allow_pass = False
+        elif room.phase == "challenge" and was_current:
+            room.phase = "play"
+            room.allow_pass = False
+
+        winner = room.session.check_winner()
+        if winner:
+            room.phase = "ended"
+            room.allow_pass = False
+            room.winner_name = winner.display_name
+            room.session.players = [
+                existing for existing in room.session.players
+                if existing.discord_id != player_id
+            ]
+            room.session.current_turn = 0
+            room.add_log(f"{name} 已{reason}。游戏结束，{winner.display_name} 获胜！", "winner")
+        else:
+            move_turn_to_active_player(room)
+            if room.phase == "play" and not room.session.last_claim:
+                room.session.reset_round()
+            current = room.session.get_current_player()
+            room.add_log(f"{name} 已{reason}。轮到 {current.display_name}。", "system")
+    else:
+        index = room.session.players.index(player)
+        room.session.players.pop(index)
+        if room.session.players:
+            room.session.current_turn = min(room.session.current_turn, len(room.session.players) - 1)
+        else:
+            room.session.current_turn = 0
+        room.add_log(f"{name} 已{reason}。", "system")
+
+    if was_owner:
+        room.owner_token = None
+    ensure_owner(room)
+    return True, name
+
+
+def move_turn_to_active_player(room: WebRoom):
+    if not room.session.players:
+        room.session.current_turn = 0
+        return
+
+    current = room.session.get_current_player()
+    if current.is_alive and (room.phase != "play" or current.hand):
+        return
+
+    skip_empty = room.phase == "play"
+    room.session.advance_turn(skip_empty=skip_empty)
+
+
+async def send_to_token(room: WebRoom, token: str, payload: dict[str, Any]):
+    sockets = list(room.connections.get(token, set()))
+    for websocket in sockets:
+        try:
+            await websocket.send_json(payload)
+        except Exception:
+            pass
+
+
+async def close_token_sockets(room: WebRoom, token: str):
+    sockets = list(room.connections.get(token, set()))
+    for websocket in sockets:
+        try:
+            await websocket.close(code=4400)
+        except Exception:
+            pass
+    room.connections.pop(token, None)
+
+
+async def close_room(room: WebRoom):
+    await send_room_event(room, {"type": "room_closed", "message": "房间已解散。"})
+    for token in list(room.connections.keys()):
+        await close_token_sockets(room, token)
+    async with rooms_lock:
+        rooms.pop(room.code, None)
+
+
+async def send_room_event(room: WebRoom, payload: dict[str, Any]):
+    for token in list(room.connections.keys()):
+        await send_to_token(room, token, payload)
+
+
+async def handle_action(room: WebRoom, token: str, payload: dict[str, Any]) -> str | dict[str, Any] | None:
     action = payload.get("type")
     if action == "ping":
         room.touch()
@@ -264,7 +406,37 @@ async def handle_action(room: WebRoom, token: str, payload: dict[str, Any]) -> s
             return ERROR_TEXT["not_player"]
 
         if action == "start":
+            if not is_owner(room, token):
+                return ERROR_TEXT["owner_only"]
             return handle_start(room, player.display_name)
+        if action == "kick":
+            if not is_owner(room, token):
+                return ERROR_TEXT["owner_only"]
+            target_token = normalize_token(payload.get("targetToken"))
+            if not target_token:
+                return ERROR_TEXT["bad_target"]
+            if target_token == token:
+                return ERROR_TEXT["cannot_remove_owner"]
+            ok, message = remove_player_from_room(room, target_token, "被房主移除")
+            if not ok:
+                return message
+            await send_to_token(room, target_token, {"type": "kicked", "message": "你已被房主移出房间。"})
+            await close_token_sockets(room, target_token)
+            return None
+        if action == "leave":
+            ok, message = remove_player_from_room(room, token, "退出房间")
+            if not ok:
+                return message
+            if not room.session.players:
+                async with rooms_lock:
+                    rooms.pop(room.code, None)
+                return {"skip_broadcast": True}
+            return {"skip_broadcast": False}
+        if action == "disband":
+            if not is_owner(room, token):
+                return ERROR_TEXT["owner_only"]
+            await close_room(room)
+            return {"skip_broadcast": True}
         if action == "play":
             indices = payload.get("indices")
             if not isinstance(indices, list):
@@ -279,6 +451,8 @@ async def handle_action(room: WebRoom, token: str, payload: dict[str, Any]) -> s
         if action == "pass":
             return handle_pass(room, player_id)
         if action == "rematch":
+            if not is_owner(room, token):
+                return ERROR_TEXT["owner_only"]
             return handle_rematch(room)
 
     return None
@@ -291,6 +465,7 @@ def handle_start(room: WebRoom, starter_name: str) -> str | None:
 
     room.phase = "play"
     room.allow_pass = False
+    room.winner_name = None
     current = room.session.get_current_player()
     room.add_log(
         f"{starter_name} 开始了游戏。本轮桌面牌是 {room.session.table_rank}，由 {current.display_name} 先出牌。",
@@ -327,13 +502,6 @@ def handle_play(room: WebRoom, player_id: int, indices: list[int]) -> str | None
         return None
 
     room.phase = "challenge"
-    if len(contenders) == 1:
-        forced = contenders[0]
-        room.session.set_current_player(forced.discord_id)
-        room.allow_pass = False
-        room.add_log(f"{forced.display_name} 是唯一还有手牌的玩家，必须质疑。", "system")
-        return None
-
     room.session.advance_turn(skip_empty=True)
     challenger = room.session.get_current_player()
     room.allow_pass = True
@@ -393,6 +561,7 @@ def handle_challenge(room: WebRoom, player_id: int) -> str | None:
     if winner:
         room.phase = "ended"
         room.allow_pass = False
+        room.winner_name = winner.display_name
         room.add_log(f"游戏结束，{winner.display_name} 获胜！", "winner")
         return None
 
@@ -430,7 +599,15 @@ def handle_rematch(room: WebRoom) -> str | None:
         room.token_to_player_id[token] = player_id
         room.player_id_to_token[player_id] = token
 
-    room.add_log("已回到大厅，可以重新开始。", "system")
+    ensure_owner(room)
+    ok, key = room.session.start_game()
+    if not ok:
+        return ERROR_TEXT.get(key, key)
+
+    room.phase = "play"
+    room.winner_name = None
+    current = room.session.get_current_player()
+    room.add_log(f"再来一局！本轮桌面牌是 {room.session.table_rank}，由 {current.display_name} 先出牌。", "system")
     return None
 
 
@@ -468,8 +645,8 @@ def build_state(room: WebRoom, token: str) -> dict[str, Any]:
             "claimedCount": session.last_claim.claimed_count,
         }
 
-    winner = None
-    if session.state == GameState.ENDED:
+    winner = room.winner_name
+    if session.state == GameState.ENDED and not winner:
         alive = session.alive_players()
         winner = alive[0].display_name if alive else None
 
@@ -486,6 +663,8 @@ def build_state(room: WebRoom, token: str) -> dict[str, Any]:
                 "cardCount": len(player.hand),
                 "connected": bool(player_token and player_token in connected),
                 "current": bool(current and current.discord_id == player.discord_id),
+                "isOwner": bool(player_token and player_token == room.owner_token),
+                "token": player_token if token == room.owner_token else None,
             }
         )
 
@@ -512,6 +691,7 @@ def build_state(room: WebRoom, token: str) -> dict[str, Any]:
             "alive": me.is_alive if me else False,
             "hand": list(me.hand) if me else [],
             "current": bool(me and current and me.discord_id == current.discord_id),
+            "isOwner": is_owner(room, token),
         },
         "players": players,
         "log": room.log[-MAX_LOG_LINES:],

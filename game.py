@@ -58,7 +58,7 @@ class GameSession:
         self.table_rank: str = random.choice(TABLE_RANKS)
 
     def add_player(self, discord_id: int, display_name: str) -> tuple[bool, str]:
-        if self.state != GameState.WAITING:
+        if self.state == GameState.PLAYING:
             return False, "game_already_started"
         if len(self.players) >= MAX_PLAYERS:
             return False, "room_full"
@@ -121,8 +121,13 @@ class GameSession:
     def start_game(self) -> tuple[bool, str]:
         if len(self.players) < 2:
             return False, "need_two_players"
-        if self.state != GameState.WAITING:
+        if self.state == GameState.PLAYING:
             return False, "already_started"
+
+        for player in self.players:
+            player.hp = MAX_HP
+            player.hand = []
+            player.is_alive = True
 
         self.state = GameState.PLAYING
         random.shuffle(self.players)
