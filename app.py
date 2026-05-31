@@ -1,4 +1,6 @@
 import asyncio
+import http.client
+import os
 import secrets
 import string
 import time
@@ -97,6 +99,31 @@ async def index():
 @app.get("/api/health")
 async def health():
     return {"ok": True, "rooms": len(rooms)}
+
+
+@app.on_event("startup")
+async def startup():
+    asyncio.create_task(self_ping_loop())
+
+
+async def self_ping_loop():
+    """每 10 分鐘 ping 自己一次，防止 Render 休眠。"""
+    await asyncio.sleep(60)  # 啟動後等 1 分鐘再開始
+    while True:
+        try:
+            port = int(os.environ.get("PORT", "8000"))
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, _do_ping, port)
+        except Exception:
+            pass
+        await asyncio.sleep(10 * 60)  # 10 分鐘一次
+
+
+def _do_ping(port: int):
+    conn = http.client.HTTPConnection("localhost", port, timeout=10)
+    conn.request("GET", "/api/health")
+    conn.getresponse()
+    conn.close()
 
 
 @app.post("/api/rooms")
