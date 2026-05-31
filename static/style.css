@@ -164,6 +164,10 @@ button:disabled {
   font-size: 13px;
 }
 
+.full {
+  width: 100%;
+}
+
 .status {
   flex: 0 0 auto;
   padding: 7px 10px;
@@ -270,6 +274,18 @@ button:disabled {
 .player-name {
   overflow-wrap: anywhere;
   font-weight: 900;
+}
+
+.owner-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #edf7f5;
+  color: #134e4a;
+  font-size: 11px;
+  font-weight: 900;
+  vertical-align: middle;
 }
 
 .player-meta {
@@ -483,6 +499,30 @@ button:disabled {
   font-weight: 900;
 }
 
+.manage-dialog {
+  max-height: min(760px, calc(100svh - 36px));
+}
+
+.manage-list {
+  display: grid;
+  gap: 8px;
+}
+
+.manage-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffaf0;
+}
+
+.manage-row button {
+  min-width: 64px;
+}
+
 @media (max-width: 420px) {
   .app {
     padding: 14px 10px 24px;
@@ -517,6 +557,12 @@ button:disabled {
   .top-actions {
     align-items: flex-end;
     flex-direction: column;
+  }
+
+  .top-actions .small,
+  .top-actions .status {
+    width: 74px;
+    text-align: center;
   }
 
   .rules-dialog {

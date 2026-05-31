@@ -1,9 +1,16 @@
 const els = {
   connectionStatus: document.querySelector("#connectionStatus"),
   rulesBtn: document.querySelector("#rulesBtn"),
+  manageBtn: document.querySelector("#manageBtn"),
+  leaveRoomBtn: document.querySelector("#leaveRoomBtn"),
   rulesModal: document.querySelector("#rulesModal"),
   rulesBackdrop: document.querySelector("#rulesBackdrop"),
   closeRulesBtn: document.querySelector("#closeRulesBtn"),
+  manageModal: document.querySelector("#manageModal"),
+  manageBackdrop: document.querySelector("#manageBackdrop"),
+  closeManageBtn: document.querySelector("#closeManageBtn"),
+  managePlayersList: document.querySelector("#managePlayersList"),
+  disbandRoomBtn: document.querySelector("#disbandRoomBtn"),
   homePanel: document.querySelector("#homePanel"),
   joinPanel: document.querySelector("#joinPanel"),
   gamePanel: document.querySelector("#gamePanel"),
@@ -13,6 +20,7 @@ const els = {
   roomCodeLabel: document.querySelector("#roomCodeLabel"),
   nameInput: document.querySelector("#nameInput"),
   enterRoomBtn: document.querySelector("#enterRoomBtn"),
+  joinBackBtn: document.querySelector("#joinBackBtn"),
   copyLinkBtn: document.querySelector("#copyLinkBtn"),
   copyLinkBtn2: document.querySelector("#copyLinkBtn2"),
   gameRoomCode: document.querySelector("#gameRoomCode"),
@@ -80,6 +88,20 @@ function closeRules() {
   els.rulesBtn.focus();
 }
 
+function openManage() {
+  if (!currentState?.you?.isOwner) return;
+  renderManage(currentState);
+  els.manageModal.classList.remove("hidden");
+  els.manageModal.setAttribute("aria-hidden", "false");
+  els.closeManageBtn.focus();
+}
+
+function closeManage() {
+  els.manageModal.classList.add("hidden");
+  els.manageModal.setAttribute("aria-hidden", "true");
+  els.manageBtn.focus();
+}
+
 function normalizeRoom(value) {
   return String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
 }
@@ -94,14 +116,39 @@ function route() {
     els.homePanel.classList.remove("hidden");
     els.joinPanel.classList.add("hidden");
     els.gamePanel.classList.add("hidden");
+    els.manageBtn.classList.add("hidden");
+    els.leaveRoomBtn.classList.add("hidden");
     return;
   }
 
   els.homePanel.classList.add("hidden");
   els.joinPanel.classList.remove("hidden");
   els.gamePanel.classList.add("hidden");
+  els.manageBtn.classList.add("hidden");
+  els.leaveRoomBtn.classList.add("hidden");
   els.roomCodeLabel.textContent = roomCode;
   els.nameInput.value = localStorage.getItem(storage.name) || "";
+}
+
+function returnToHome(message = "") {
+  manualClose = true;
+  stopHeartbeat();
+  window.clearTimeout(reconnectTimer);
+  if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+  ws = null;
+  currentState = null;
+  selected.clear();
+  closeManageQuietly();
+  roomCode = "";
+  history.replaceState(null, "", "/");
+  route();
+  setStatus("未连接", "");
+  showToast(message);
+}
+
+function closeManageQuietly() {
+  els.manageModal.classList.add("hidden");
+  els.manageModal.setAttribute("aria-hidden", "true");
 }
 
 async function createRoom() {
@@ -150,6 +197,10 @@ function connect() {
     if (msg.type === "state") {
       currentState = msg;
       render(msg);
+    } else if (msg.type === "room_closed") {
+      returnToHome(msg.message || "房间已解散。");
+    } else if (msg.type === "kicked") {
+      returnToHome(msg.message || "你已被移出房间。");
     } else if (msg.type === "toast" || msg.type === "error") {
       showToast(msg.message);
     }
@@ -202,7 +253,15 @@ function render(state) {
   renderPlayers(state);
   renderHand(state);
   renderActions(state);
+  renderTopActions(state);
   renderLog(state);
+  if (!els.manageModal.classList.contains("hidden")) renderManage(state);
+}
+
+function renderTopActions(state) {
+  const inRoom = Boolean(state.you?.id);
+  els.manageBtn.classList.toggle("hidden", !state.you?.isOwner);
+  els.leaveRoomBtn.classList.toggle("hidden", !inRoom);
 }
 
 function renderTurn(state) {
@@ -210,7 +269,9 @@ function renderTurn(state) {
   if (room.state === "waiting") {
     els.turnText.textContent = `等待玩家加入，当前 ${state.players.length} / ${room.maxPlayers} 人。`;
   } else if (room.state === "ended") {
-    els.turnText.textContent = `游戏结束，${room.winner || "胜利者"} 获胜。`;
+    els.turnText.textContent = state.you.isOwner
+      ? `游戏结束，${room.winner || "胜利者"} 获胜。可以再来一局。`
+      : `游戏结束，${room.winner || "胜利者"} 获胜。等待房主开始下一局。`;
   } else if (room.phase === "challenge") {
     els.turnText.textContent = `轮到 ${room.currentPlayerName} 决定是否质疑。`;
   } else {
@@ -238,7 +299,13 @@ function renderPlayers(state) {
     const left = document.createElement("div");
     const name = document.createElement("div");
     name.className = "player-name";
-    name.textContent = `${player.name}${player.id === state.you.id ? "（你）" : ""}`;
+    name.append(document.createTextNode(`${player.name}${player.id === state.you.id ? "（你）" : ""}`));
+    if (player.isOwner) {
+      const badge = document.createElement("span");
+      badge.className = "owner-badge";
+      badge.textContent = "房主";
+      name.append(badge);
+    }
     const meta = document.createElement("div");
     meta.className = "player-meta";
     meta.textContent = `${player.alive ? `${player.cardCount} 张手牌` : "已出局"} · ${player.connected ? "在线" : "离线"}`;
@@ -289,14 +356,44 @@ function renderHand(state) {
 
 function renderActions(state) {
   const room = state.room;
-  const canStart = room.state === "waiting" && state.players.length >= 2;
-  els.startGameBtn.classList.toggle("hidden", room.state !== "waiting");
+  const canStart = room.state === "waiting" && state.players.length >= 2 && state.you.isOwner;
+  els.startGameBtn.classList.toggle("hidden", room.state !== "waiting" || !state.you.isOwner);
   els.startGameBtn.disabled = !canStart;
-  els.rematchBtn.classList.toggle("hidden", room.state !== "ended");
+  els.rematchBtn.classList.toggle("hidden", room.state !== "ended" || !state.you.isOwner);
 
   const canChallenge = room.state === "playing" && room.phase === "challenge" && state.you.current && state.you.alive;
   els.challengePanel.classList.toggle("hidden", !canChallenge);
   els.passBtn.classList.toggle("hidden", !room.allowPass);
+}
+
+function renderManage(state) {
+  els.managePlayersList.innerHTML = "";
+  state.players.forEach((player) => {
+    const row = document.createElement("div");
+    row.className = "manage-row";
+
+    const info = document.createElement("div");
+    const name = document.createElement("div");
+    name.className = "player-name";
+    name.textContent = `${player.name}${player.id === state.you.id ? "（你）" : ""}${player.isOwner ? " · 房主" : ""}`;
+    const meta = document.createElement("div");
+    meta.className = "player-meta";
+    meta.textContent = `${player.connected ? "在线" : "离线"} · ${player.alive ? "游戏中" : "已出局"}`;
+    info.append(name, meta);
+
+    const kickBtn = document.createElement("button");
+    kickBtn.className = "danger small";
+    kickBtn.type = "button";
+    kickBtn.textContent = "移除";
+    kickBtn.disabled = player.id === state.you.id || !player.token;
+    kickBtn.addEventListener("click", () => {
+      if (!window.confirm(`确定要移除 ${player.name} 吗？`)) return;
+      send({ type: "kick", targetToken: player.token });
+    });
+
+    row.append(info, kickBtn);
+    els.managePlayersList.append(row);
+  });
 }
 
 function renderLog(state) {
@@ -316,6 +413,19 @@ function copyLink() {
   );
 }
 
+function leaveRoom() {
+  if (!currentState?.you?.id) returnToHome();
+  if (!window.confirm("确定要退出房间吗？")) return;
+  send({ type: "leave" });
+  window.setTimeout(() => returnToHome("已退出房间。"), 120);
+}
+
+function disbandRoom() {
+  if (!currentState?.you?.isOwner) return;
+  if (!window.confirm("确定要解散房间吗？所有玩家都会返回首页。")) return;
+  send({ type: "disband" });
+}
+
 els.createRoomBtn.addEventListener("click", createRoom);
 els.joinByCodeBtn.addEventListener("click", () => {
   const code = normalizeRoom(els.roomInput.value);
@@ -327,9 +437,15 @@ els.joinByCodeBtn.addEventListener("click", () => {
 els.enterRoomBtn.addEventListener("click", connect);
 els.copyLinkBtn.addEventListener("click", copyLink);
 els.copyLinkBtn2.addEventListener("click", copyLink);
+els.joinBackBtn.addEventListener("click", () => returnToHome());
 els.rulesBtn.addEventListener("click", openRules);
 els.closeRulesBtn.addEventListener("click", closeRules);
 els.rulesBackdrop.addEventListener("click", closeRules);
+els.manageBtn.addEventListener("click", openManage);
+els.closeManageBtn.addEventListener("click", closeManage);
+els.manageBackdrop.addEventListener("click", closeManage);
+els.leaveRoomBtn.addEventListener("click", leaveRoom);
+els.disbandRoomBtn.addEventListener("click", disbandRoom);
 els.startGameBtn.addEventListener("click", () => send({ type: "start" }));
 els.playCardsBtn.addEventListener("click", () => {
   const indices = [...selected].sort((a, b) => a - b);
@@ -345,6 +461,8 @@ els.nameInput.addEventListener("keydown", (event) => {
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !els.rulesModal.classList.contains("hidden")) {
     closeRules();
+  } else if (event.key === "Escape" && !els.manageModal.classList.contains("hidden")) {
+    closeManage();
   }
 });
 

@@ -21,6 +21,8 @@
         </div>
         <div class="top-actions">
           <button class="small ghost" id="rulesBtn" type="button">规则</button>
+          <button class="small ghost hidden" id="manageBtn" type="button">管理</button>
+          <button class="small danger hidden" id="leaveRoomBtn" type="button">退出</button>
           <div class="status" id="connectionStatus">未连接</div>
         </div>
       </header>
@@ -47,7 +49,10 @@
           你的名字
           <input id="nameInput" maxlength="16" autocomplete="nickname" placeholder="输入名字" />
         </label>
-        <button class="primary" id="enterRoomBtn">进入房间</button>
+        <div class="actions">
+          <button class="primary" id="enterRoomBtn">进入房间</button>
+          <button id="joinBackBtn" type="button">返回</button>
+        </div>
       </section>
       <section class="game hidden" id="gamePanel">
         <section class="panel room-head">
@@ -75,7 +80,7 @@
           <div class="section-title">
             <h2>玩家</h2>
             <button class="small hidden" id="startGameBtn">开始游戏</button>
-            <button class="small hidden" id="rematchBtn">回到大厅</button>
+            <button class="small hidden" id="rematchBtn">再来一局</button>
           </div>
           <div class="players" id="playersList"></div>
         </section>
@@ -165,6 +170,26 @@
             </div>
           </section>
         </div>
+      </section>
+    </div>
+    <div class="modal hidden" id="manageModal" aria-hidden="true">
+      <div class="modal-backdrop" id="manageBackdrop"></div>
+      <section class="rules-dialog manage-dialog" role="dialog" aria-modal="true" aria-labelledby="manageTitle">
+        <div class="section-title">
+          <div>
+            <p class="eyebrow">Room</p>
+            <h2 id="manageTitle">房间管理</h2>
+          </div>
+          <button class="small" id="closeManageBtn" type="button" aria-label="关闭管理">关闭</button>
+        </div>
+        <section class="rules-card">
+          <h3>玩家管理</h3>
+          <div class="manage-list" id="managePlayersList"></div>
+        </section>
+        <section class="rules-card">
+          <h3>房间管理</h3>
+          <button class="danger full" id="disbandRoomBtn" type="button">解散房间</button>
+        </section>
       </section>
     </div>
     <div class="toast hidden" id="toast"></div>
