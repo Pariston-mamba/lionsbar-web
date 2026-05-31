@@ -327,6 +327,13 @@ def handle_play(room: WebRoom, player_id: int, indices: list[int]) -> str | None
         return None
 
     room.phase = "challenge"
+    if len(contenders) == 1:
+        forced = contenders[0]
+        room.session.set_current_player(forced.discord_id)
+        room.allow_pass = False
+        room.add_log(f"{forced.display_name} 是唯一还有手牌的玩家，必须质疑。", "system")
+        return None
+
     room.session.advance_turn(skip_empty=True)
     challenger = room.session.get_current_player()
     room.allow_pass = True
