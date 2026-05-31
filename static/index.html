@@ -4,6 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>狮子酒吧</title>
+    <link rel="icon" type="image/png" href="/static/lion.png" />
+    <meta property="og:title" content="狮子酒吧" />
+    <meta property="og:description" content="2–6 人联机桌游。出牌、撒谎、质疑——最后活下来的人才是赢家。" />
+    <meta property="og:image" content="https://lionsbar-web.onrender.com/static/lion.png" />
+    <meta property="og:url" content="https://lionsbar-web.onrender.com" />
+    <meta property="og:type" content="website" />
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body>
@@ -15,7 +21,6 @@
         </div>
         <div class="status" id="connectionStatus">未连接</div>
       </header>
-
       <section class="panel" id="homePanel">
         <h2>开房或加入</h2>
         <div class="stack">
@@ -27,7 +32,6 @@
           <button id="joinByCodeBtn">加入房间</button>
         </div>
       </section>
-
       <section class="panel hidden" id="joinPanel">
         <div class="roomline">
           <div>
@@ -42,7 +46,6 @@
         </label>
         <button class="primary" id="enterRoomBtn">进入房间</button>
       </section>
-
       <section class="game hidden" id="gamePanel">
         <section class="panel room-head">
           <div>
@@ -51,7 +54,6 @@
           </div>
           <button class="small" id="copyLinkBtn2">复制链接</button>
         </section>
-
         <section class="panel">
           <div class="round-grid">
             <div>
@@ -66,7 +68,6 @@
           <p class="turn" id="turnText">等待玩家加入。</p>
           <div class="claim hidden" id="claimBox"></div>
         </section>
-
         <section class="panel">
           <div class="section-title">
             <h2>玩家</h2>
@@ -75,7 +76,6 @@
           </div>
           <div class="players" id="playersList"></div>
         </section>
-
         <section class="panel" id="handPanel">
           <div class="section-title">
             <h2>你的手牌</h2>
@@ -84,7 +84,6 @@
           <div class="hand" id="handCards"></div>
           <button class="primary hidden" id="playCardsBtn">出牌</button>
         </section>
-
         <section class="panel hidden" id="challengePanel">
           <h2>是否质疑？</h2>
           <div class="actions">
@@ -92,14 +91,12 @@
             <button id="passBtn">放行并出牌</button>
           </div>
         </section>
-
         <section class="panel">
           <h2>记录</h2>
           <div class="log" id="logList"></div>
         </section>
       </section>
     </main>
-
     <div class="toast hidden" id="toast"></div>
     <script src="/static/app.js" defer></script>
   </body>
