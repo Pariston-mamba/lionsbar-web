@@ -1,5 +1,9 @@
 const els = {
   connectionStatus: document.querySelector("#connectionStatus"),
+  rulesBtn: document.querySelector("#rulesBtn"),
+  rulesModal: document.querySelector("#rulesModal"),
+  rulesBackdrop: document.querySelector("#rulesBackdrop"),
+  closeRulesBtn: document.querySelector("#closeRulesBtn"),
   homePanel: document.querySelector("#homePanel"),
   joinPanel: document.querySelector("#joinPanel"),
   gamePanel: document.querySelector("#gamePanel"),
@@ -62,6 +66,18 @@ function showToast(message) {
   els.toast.classList.remove("hidden");
   window.clearTimeout(showToast.timer);
   showToast.timer = window.setTimeout(() => els.toast.classList.add("hidden"), 2600);
+}
+
+function openRules() {
+  els.rulesModal.classList.remove("hidden");
+  els.rulesModal.setAttribute("aria-hidden", "false");
+  els.closeRulesBtn.focus();
+}
+
+function closeRules() {
+  els.rulesModal.classList.add("hidden");
+  els.rulesModal.setAttribute("aria-hidden", "true");
+  els.rulesBtn.focus();
 }
 
 function normalizeRoom(value) {
@@ -311,6 +327,9 @@ els.joinByCodeBtn.addEventListener("click", () => {
 els.enterRoomBtn.addEventListener("click", connect);
 els.copyLinkBtn.addEventListener("click", copyLink);
 els.copyLinkBtn2.addEventListener("click", copyLink);
+els.rulesBtn.addEventListener("click", openRules);
+els.closeRulesBtn.addEventListener("click", closeRules);
+els.rulesBackdrop.addEventListener("click", closeRules);
 els.startGameBtn.addEventListener("click", () => send({ type: "start" }));
 els.playCardsBtn.addEventListener("click", () => {
   const indices = [...selected].sort((a, b) => a - b);
@@ -322,6 +341,11 @@ els.passBtn.addEventListener("click", () => send({ type: "pass" }));
 els.rematchBtn.addEventListener("click", () => send({ type: "rematch" }));
 els.nameInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") connect();
+});
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !els.rulesModal.classList.contains("hidden")) {
+    closeRules();
+  }
 });
 
 route();

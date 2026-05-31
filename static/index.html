@@ -19,7 +19,10 @@
           <p class="eyebrow">Lionsbar</p>
           <h1>狮子酒吧</h1>
         </div>
-        <div class="status" id="connectionStatus">未连接</div>
+        <div class="top-actions">
+          <button class="small ghost" id="rulesBtn" type="button">规则</button>
+          <div class="status" id="connectionStatus">未连接</div>
+        </div>
       </header>
       <section class="panel" id="homePanel">
         <h2>开房或加入</h2>
@@ -97,6 +100,73 @@
         </section>
       </section>
     </main>
+    <div class="modal hidden" id="rulesModal" aria-hidden="true">
+      <div class="modal-backdrop" id="rulesBackdrop"></div>
+      <section class="rules-dialog" role="dialog" aria-modal="true" aria-labelledby="rulesTitle">
+        <div class="section-title">
+          <div>
+            <p class="eyebrow">How to play</p>
+            <h2 id="rulesTitle">狮子酒吧规则</h2>
+          </div>
+          <button class="small" id="closeRulesBtn" type="button" aria-label="关闭规则">关闭</button>
+        </div>
+        <div class="rules-content">
+          <section class="rules-card">
+            <h3>基本流程</h3>
+            <dl class="rules-list">
+              <div>
+                <dt>桌面牌</dt>
+                <dd>每轮会指定一种桌面牌，例如 A、K 或 Q。所有玩家只能宣称自己出的牌符合桌面牌，就算其实不是。</dd>
+              </div>
+              <div>
+                <dt>出牌</dt>
+                <dd>轮到你时，可以从手牌中出 1-3 张牌。Joker 是万能牌，永远可以当作桌面牌。</dd>
+              </div>
+              <div>
+                <dt>出牌后</dt>
+                <dd>下一位玩家要先决定：质疑并翻开上一位的牌，或不质疑并轮到自己出牌。</dd>
+              </div>
+              <div>
+                <dt>质疑结果</dt>
+                <dd>质疑成功时，说谎者扣 1 HP；质疑失败时，质疑者扣 1 HP。</dd>
+              </div>
+              <div>
+                <dt>回合结束</dt>
+                <dd>只要有人质疑并翻牌，该轮立刻结束，重新发牌并指定新的桌面牌。</dd>
+              </div>
+              <div>
+                <dt>下一轮</dt>
+                <dd>刚刚扣血的玩家先出牌；如果该玩家被淘汰，则由下一位存活玩家开始。</dd>
+              </div>
+              <div>
+                <dt>手牌出光</dt>
+                <dd>本轮没有手牌的玩家会被跳过；如果只剩一位玩家有手牌，该玩家必须质疑。</dd>
+              </div>
+              <div>
+                <dt>胜利</dt>
+                <dd>活到最后的人获胜。</dd>
+              </div>
+            </dl>
+          </section>
+          <section class="rules-card">
+            <h3>牌组信息</h3>
+            <p class="rules-note">每轮会依照存活玩家人数重新建立牌组。</p>
+            <div class="deck-grid">
+              <div><strong>2 人</strong><span>A/K/Q 各 3 张 + Joker 1 张 = 10 张</span></div>
+              <div><strong>3 人</strong><span>A/K/Q 各 4 张 + Joker 3 张 = 15 张</span></div>
+              <div><strong>4 人</strong><span>A/K/Q 各 6 张 + Joker 2 张 = 20 张</span></div>
+              <div><strong>5 人</strong><span>A/K/Q 各 7 张 + Joker 4 张 = 25 张</span></div>
+              <div><strong>6 人</strong><span>A/K/Q 各 9 张 + Joker 3 张 = 30 张</span></div>
+            </div>
+            <div class="rules-summary">
+              <span>起始手牌：5 张</span>
+              <span>起始血量：5 HP</span>
+              <span>每次最多出牌：3 张</span>
+            </div>
+          </section>
+        </div>
+      </section>
+    </div>
     <div class="toast hidden" id="toast"></div>
     <script src="/static/app.js" defer></script>
   </body>

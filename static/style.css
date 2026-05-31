@@ -43,6 +43,13 @@ body {
   padding: 6px 2px 14px;
 }
 
+.top-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
 .eyebrow {
   margin: 0 0 2px;
   color: var(--accent);
@@ -126,6 +133,11 @@ button {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.ghost {
+  border: 1px solid var(--line);
+  background: rgba(255, 253, 248, 0.78);
 }
 
 .primary {
@@ -348,6 +360,129 @@ button:disabled {
   box-shadow: var(--shadow);
 }
 
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 18px 14px;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(36, 33, 29, 0.42);
+  backdrop-filter: blur(3px);
+}
+
+.rules-dialog {
+  position: relative;
+  width: min(720px, 100%);
+  max-height: min(820px, calc(100svh - 36px));
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background:
+    linear-gradient(145deg, rgba(15, 118, 110, 0.08), transparent 36%),
+    var(--panel);
+  box-shadow: 0 24px 70px rgba(36, 33, 29, 0.28);
+}
+
+.rules-content {
+  display: grid;
+  gap: 12px;
+}
+
+.rules-card {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 250, 240, 0.82);
+}
+
+.rules-card h3 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.rules-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.rules-list div {
+  display: grid;
+  grid-template-columns: 86px 1fr;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(222, 213, 199, 0.78);
+}
+
+.rules-list div:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.rules-list dt {
+  color: var(--accent-dark);
+  font-weight: 900;
+}
+
+.rules-list dd {
+  margin: 0;
+  color: var(--ink);
+  line-height: 1.65;
+}
+
+.rules-note {
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.deck-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.deck-grid div {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border-radius: 8px;
+  background: #f5efe5;
+}
+
+.deck-grid strong {
+  color: var(--gold);
+}
+
+.deck-grid span {
+  line-height: 1.45;
+}
+
+.rules-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.rules-summary span {
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: #edf7f5;
+  color: #134e4a;
+  font-size: 12px;
+  font-weight: 900;
+}
+
 @media (max-width: 420px) {
   .app {
     padding: 14px 10px 24px;
@@ -373,5 +508,24 @@ button:disabled {
 
   .section-title .small {
     width: 100%;
+  }
+
+  .topbar {
+    align-items: flex-start;
+  }
+
+  .top-actions {
+    align-items: flex-end;
+    flex-direction: column;
+  }
+
+  .rules-dialog {
+    padding: 14px;
+  }
+
+  .rules-list div,
+  .deck-grid div {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 }
