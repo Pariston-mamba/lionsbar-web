@@ -96,7 +96,7 @@ async def index():
     return FileResponse(BASE_DIR / "static" / "index.html")
 
 
-@app.get("/api/health")
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health():
     return {"ok": True, "rooms": len(rooms)}
 
