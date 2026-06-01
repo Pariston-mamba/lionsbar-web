@@ -1,5 +1,6 @@
 const els = {
   connectionStatus: document.querySelector("#connectionStatus"),
+  homeInviteBtn: document.querySelector("#homeInviteBtn"),
   rulesBtn: document.querySelector("#rulesBtn"),
   manageBtn: document.querySelector("#manageBtn"),
   leaveRoomBtn: document.querySelector("#leaveRoomBtn"),
@@ -11,6 +12,11 @@ const els = {
   closeManageBtn: document.querySelector("#closeManageBtn"),
   managePlayersList: document.querySelector("#managePlayersList"),
   disbandRoomBtn: document.querySelector("#disbandRoomBtn"),
+  inviteModal: document.querySelector("#inviteModal"),
+  inviteBackdrop: document.querySelector("#inviteBackdrop"),
+  closeInviteBtn: document.querySelector("#closeInviteBtn"),
+  inviteQr: document.querySelector("#inviteQr"),
+  inviteHint: document.querySelector("#inviteHint"),
   homePanel: document.querySelector("#homePanel"),
   joinPanel: document.querySelector("#joinPanel"),
   gamePanel: document.querySelector("#gamePanel"),
@@ -48,6 +54,8 @@ let selected = new Set();
 let reconnectTimer = null;
 let heartbeatTimer = null;
 let manualClose = false;
+let inviteQr = null;
+let inviteReturnFocus = null;
 
 const storage = {
   token: "lionsbar_token",
@@ -102,6 +110,10 @@ function closeManage() {
   els.manageBtn.focus();
 }
 
+function homeUrl() {
+  return `${location.origin}/`;
+}
+
 function normalizeRoom(value) {
   return String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
 }
@@ -110,12 +122,81 @@ function roomUrl() {
   return `${location.origin}/?room=${roomCode}`;
 }
 
+function buildQr(url) {
+  els.inviteQr.innerHTML = "";
+  if (!window.QRCodeStyling) {
+    const fallback = document.createElement("a");
+    fallback.href = url;
+    fallback.textContent = url;
+    fallback.className = "invite-link";
+    els.inviteQr.append(fallback);
+    return;
+  }
+
+  inviteQr = new QRCodeStyling({
+    width: 236,
+    height: 236,
+    type: "svg",
+    data: url,
+    image: "/static/avatar.png",
+    margin: 10,
+    qrOptions: {
+      errorCorrectionLevel: "H",
+    },
+    imageOptions: {
+      crossOrigin: "anonymous",
+      hideBackgroundDots: true,
+      imageSize: 0.22,
+      margin: 6,
+    },
+    dotsOptions: {
+      color: "#24211d",
+      type: "rounded",
+    },
+    cornersSquareOptions: {
+      color: "#0f766e",
+      type: "extra-rounded",
+    },
+    cornersDotOptions: {
+      color: "#0b5f59",
+      type: "dot",
+    },
+    backgroundOptions: {
+      color: "#fffdf8",
+    },
+  });
+  inviteQr.append(els.inviteQr);
+}
+
+function openInvite(url, hint, trigger) {
+  inviteReturnFocus = trigger || document.activeElement;
+  buildQr(url);
+  els.inviteHint.textContent = hint;
+  els.inviteModal.classList.remove("hidden");
+  els.inviteModal.setAttribute("aria-hidden", "false");
+  els.closeInviteBtn.focus();
+}
+
+function closeInvite() {
+  els.inviteModal.classList.add("hidden");
+  els.inviteModal.setAttribute("aria-hidden", "true");
+  if (inviteReturnFocus) inviteReturnFocus.focus();
+}
+
+function copyText(text) {
+  return navigator.clipboard.writeText(text).then(
+    () => showToast("链接已复制。"),
+    () => showToast(text),
+  );
+}
+
 function route() {
   roomCode = normalizeRoom(roomCode);
   if (!roomCode) {
     els.homePanel.classList.remove("hidden");
     els.joinPanel.classList.add("hidden");
     els.gamePanel.classList.add("hidden");
+    els.homeInviteBtn.classList.remove("hidden");
     els.manageBtn.classList.add("hidden");
     els.leaveRoomBtn.classList.add("hidden");
     return;
@@ -124,6 +205,7 @@ function route() {
   els.homePanel.classList.add("hidden");
   els.joinPanel.classList.remove("hidden");
   els.gamePanel.classList.add("hidden");
+  els.homeInviteBtn.classList.add("hidden");
   els.manageBtn.classList.add("hidden");
   els.leaveRoomBtn.classList.add("hidden");
   els.roomCodeLabel.textContent = roomCode;
@@ -139,6 +221,7 @@ function returnToHome(message = "") {
   currentState = null;
   selected.clear();
   closeManageQuietly();
+  closeInviteQuietly();
   roomCode = "";
   history.replaceState(null, "", "/");
   route();
@@ -149,6 +232,11 @@ function returnToHome(message = "") {
 function closeManageQuietly() {
   els.manageModal.classList.add("hidden");
   els.manageModal.setAttribute("aria-hidden", "true");
+}
+
+function closeInviteQuietly() {
+  els.inviteModal.classList.add("hidden");
+  els.inviteModal.setAttribute("aria-hidden", "true");
 }
 
 async function createRoom() {
@@ -260,6 +348,7 @@ function render(state) {
 
 function renderTopActions(state) {
   const inRoom = Boolean(state.you?.id);
+  els.homeInviteBtn.classList.add("hidden");
   els.manageBtn.classList.toggle("hidden", !state.you?.isOwner);
   els.leaveRoomBtn.classList.toggle("hidden", !inRoom);
 }
@@ -407,10 +496,15 @@ function renderLog(state) {
 }
 
 function copyLink() {
-  navigator.clipboard.writeText(roomUrl()).then(
-    () => showToast("链接已复制。"),
-    () => showToast(roomUrl()),
-  );
+  const url = roomUrl();
+  copyText(url);
+  openInvite(url, "扫码加入", document.activeElement);
+}
+
+function inviteHome() {
+  const url = homeUrl();
+  copyText(url);
+  openInvite(url, "扫码打开", els.homeInviteBtn);
 }
 
 function leaveRoom() {
@@ -435,6 +529,7 @@ els.joinByCodeBtn.addEventListener("click", () => {
   route();
 });
 els.enterRoomBtn.addEventListener("click", connect);
+els.homeInviteBtn.addEventListener("click", inviteHome);
 els.copyLinkBtn.addEventListener("click", copyLink);
 els.copyLinkBtn2.addEventListener("click", copyLink);
 els.joinBackBtn.addEventListener("click", () => returnToHome());
@@ -444,6 +539,8 @@ els.rulesBackdrop.addEventListener("click", closeRules);
 els.manageBtn.addEventListener("click", openManage);
 els.closeManageBtn.addEventListener("click", closeManage);
 els.manageBackdrop.addEventListener("click", closeManage);
+els.closeInviteBtn.addEventListener("click", closeInvite);
+els.inviteBackdrop.addEventListener("click", closeInvite);
 els.leaveRoomBtn.addEventListener("click", leaveRoom);
 els.disbandRoomBtn.addEventListener("click", disbandRoom);
 els.startGameBtn.addEventListener("click", () => send({ type: "start" }));
@@ -459,7 +556,9 @@ els.nameInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") connect();
 });
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !els.rulesModal.classList.contains("hidden")) {
+  if (event.key === "Escape" && !els.inviteModal.classList.contains("hidden")) {
+    closeInvite();
+  } else if (event.key === "Escape" && !els.rulesModal.classList.contains("hidden")) {
     closeRules();
   } else if (event.key === "Escape" && !els.manageModal.classList.contains("hidden")) {
     closeManage();

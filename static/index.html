@@ -20,6 +20,7 @@
           <h1>狮子酒吧</h1>
         </div>
         <div class="top-actions">
+          <button class="small ghost hidden" id="homeInviteBtn" type="button">邀请</button>
           <button class="small ghost" id="rulesBtn" type="button">规则</button>
           <button class="small ghost hidden" id="manageBtn" type="button">管理</button>
           <button class="small danger hidden" id="leaveRoomBtn" type="button">退出</button>
@@ -192,7 +193,24 @@
         </section>
       </section>
     </div>
+    <div class="modal hidden" id="inviteModal" aria-hidden="true">
+      <div class="modal-backdrop" id="inviteBackdrop"></div>
+      <section class="invite-dialog" role="dialog" aria-modal="true" aria-labelledby="inviteTitle">
+        <div class="section-title invite-title">
+          <div>
+            <p class="eyebrow">Invite</p>
+            <h2 id="inviteTitle">邀请</h2>
+          </div>
+          <button class="small" id="closeInviteBtn" type="button" aria-label="关闭邀请">关闭</button>
+        </div>
+        <div class="invite-content">
+          <div class="qr-shell" id="inviteQr"></div>
+          <p class="invite-hint" id="inviteHint">扫码加入</p>
+        </div>
+      </section>
+    </div>
     <div class="toast hidden" id="toast"></div>
+    <script src="https://cdn.jsdelivr.net/npm/qr-code-styling@1.9.2/lib/qr-code-styling.js"></script>
     <script src="/static/app.js" defer></script>
   </body>
 </html>

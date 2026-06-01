@@ -406,6 +406,61 @@ button:disabled {
   box-shadow: 0 24px 70px rgba(36, 33, 29, 0.28);
 }
 
+.invite-dialog {
+  position: relative;
+  width: min(360px, 100%);
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background:
+    linear-gradient(145deg, rgba(15, 118, 110, 0.08), transparent 42%),
+    var(--panel);
+  box-shadow: 0 24px 70px rgba(36, 33, 29, 0.28);
+}
+
+.invite-title {
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.invite-content {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+}
+
+.qr-shell {
+  display: grid;
+  place-items: center;
+  width: min(272px, 100%);
+  min-height: 272px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.qr-shell svg {
+  display: block;
+  width: 100%;
+  max-width: 236px;
+  height: auto;
+}
+
+.invite-hint,
+.invite-link {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.invite-link {
+  color: var(--accent-dark);
+}
+
 .rules-content {
   display: grid;
   gap: 12px;
@@ -567,6 +622,18 @@ button:disabled {
 
   .rules-dialog {
     padding: 14px;
+  }
+
+  .invite-dialog {
+    padding: 14px;
+  }
+
+  .invite-title {
+    flex-direction: row;
+  }
+
+  .invite-title .small {
+    width: auto;
   }
 
   .rules-list div,
