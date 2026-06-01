@@ -138,7 +138,7 @@ function buildQr(url) {
     height: 236,
     type: "svg",
     data: url,
-    image: "/static/avatar.png",
+    image: "/static/avatar.png?v=20260601-1",
     margin: 10,
     qrOptions: {
       errorCorrectionLevel: "H",
