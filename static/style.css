@@ -365,7 +365,7 @@ button:disabled {
   right: 14px;
   bottom: 16px;
   left: 14px;
-  z-index: 10;
+  z-index: 40;
   max-width: 720px;
   margin: 0 auto;
   padding: 12px 14px;
