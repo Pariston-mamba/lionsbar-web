@@ -656,4 +656,15 @@ button:disabled {
     grid-template-columns: 1fr;
     gap: 4px;
   }
+ 
+    /* 玩家管理專屬框 */
+  .player-manage-card {
+    margin-bottom: 16px;
+  }
+
+  /* 房間管理區塊對齊 */
+  .room-manage {
+    padding: 0 4px; /* 讓解散按鈕跟上面對齊 */
+  }
+  
 }
