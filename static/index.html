@@ -10,7 +10,7 @@
     <meta property="og:image" content="https://lionsbar-web.onrender.com/static/lion.png" />
     <meta property="og:url" content="https://lionsbar-web.onrender.com" />
     <meta property="og:type" content="website" />
-    <link rel="stylesheet" href="/static/style.css?v=20260603-2" />
+    <link rel="stylesheet" href="/static/style.css?v=20260603-1" />
   </head>
   <body>
     <main class="app">
@@ -184,18 +184,13 @@
           <button class="small" id="closeManageBtn" type="button" aria-label="关闭管理">关闭</button>
         </div>
         <div class="manage-body">
-          <!-- 玩家管理 - 加回框 -->
-          <section class="rules-card player-manage-card">
-            <h3>玩家管理</h3>
-            <div class="manage-list" id="managePlayersList"></div>
-          </section>
-
-          <!-- 房間管理 - 無框，保留虛線 -->
-          <div class="room-manage">
-            <div class="manage-divider" aria-hidden="true"></div>
-            <button class="danger full" id="disbandRoomBtn" type="button">解散房间</button>
-          </div>
+          <h3>玩家管理</h3>
+          <div class="manage-list" id="managePlayersList"></div>
+          <div class="manage-divider" aria-hidden="true"></div>
+          <button class="danger full" id="disbandRoomBtn" type="button">解散房间</button>
         </div>
+      </section>
+    </div>
     <div class="modal hidden" id="inviteModal" aria-hidden="true">
       <div class="modal-backdrop" id="inviteBackdrop"></div>
       <section class="invite-dialog" role="dialog" aria-modal="true" aria-labelledby="inviteTitle">
@@ -214,6 +209,6 @@
     </div>
     <div class="toast hidden" id="toast"></div>
     <script src="https://cdn.jsdelivr.net/npm/qr-code-styling@1.9.2/lib/qr-code-styling.js"></script>
-    <script src="/static/app.js?v=20260603-2" defer></script>
+    <script src="/static/app.js?v=20260603-1" defer></script>
   </body>
 </html>

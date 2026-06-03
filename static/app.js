@@ -498,13 +498,13 @@ function renderLog(state) {
 function copyLink() {
   const url = roomUrl();
   copyText(url);
-  openInvite(url, "可扫码加入", document.activeElement);
+  openInvite(url, "扫码加入", document.activeElement);
 }
 
 function inviteHome() {
   const url = homeUrl();
   copyText(url);
-  openInvite(url, "可扫码打开", els.homeInviteBtn);
+  openInvite(url, "扫码打开", els.homeInviteBtn);
 }
 
 function leaveRoom() {
