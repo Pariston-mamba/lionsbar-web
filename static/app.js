@@ -138,7 +138,7 @@ function buildQr(url) {
     height: 236,
     type: "svg",
     data: url,
-    image: "/static/avatar.png?v=20260601-1",
+    image: "/static/avatar.png?v=20260603-1",
     margin: 10,
     qrOptions: {
       errorCorrectionLevel: "H",
@@ -498,13 +498,13 @@ function renderLog(state) {
 function copyLink() {
   const url = roomUrl();
   copyText(url);
-  openInvite(url, "可扫码加入", document.activeElement);
+  openInvite(url, "扫码加入", document.activeElement);
 }
 
 function inviteHome() {
   const url = homeUrl();
   copyText(url);
-  openInvite(url, "可扫码打开", els.homeInviteBtn);
+  openInvite(url, "扫码打开", els.homeInviteBtn);
 }
 
 function leaveRoom() {

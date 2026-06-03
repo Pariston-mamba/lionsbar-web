@@ -558,9 +558,24 @@ button:disabled {
   max-height: min(760px, calc(100svh - 36px));
 }
 
+.manage-body {
+  display: grid;
+  gap: 12px;
+}
+
+.manage-body h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
 .manage-list {
   display: grid;
   gap: 8px;
+}
+
+.manage-divider {
+  height: 1px;
+  background: rgba(222, 213, 199, 0.9);
 }
 
 .manage-row {
