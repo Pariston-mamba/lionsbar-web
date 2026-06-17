@@ -1,8 +1,5 @@
 import asyncio
-import http.client
-import os
 import secrets
-import string
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +16,12 @@ BASE_DIR = Path(__file__).resolve().parent
 ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 ROOM_TTL_SECONDS = 60 * 60 * 6
 MAX_LOG_LINES = 60
+EMOTES = ["😏", "🤨", "😎", "😱", "😭", "🤝", "🔥", "💀"]
+TURN_SECONDS_OPTIONS = (0, 30, 60)
+EMOTE_COOLDOWN_SECONDS = 1.5
+MAX_CHAT_LINES = 40
+CHAT_MAX_LEN = 200
+CHAT_COOLDOWN_SECONDS = 0.4
 
 ERROR_TEXT = {
     "game_already_started": "游戏已经开始，不能中途加入。请用原本的浏览器重连。",
@@ -69,6 +72,14 @@ class WebRoom:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     created_at: float = field(default_factory=time.time)
     last_seen_at: float = field(default_factory=time.time)
+    turn_seconds: int = 0
+    turn_deadline: float | None = None
+    turn_timer_task: "asyncio.Task | None" = None
+    last_event: dict[str, Any] | None = None
+    event_seq: int = 0
+    emote_cooldown: dict[str, float] = field(default_factory=dict)
+    chat: list[dict[str, Any]] = field(default_factory=list)
+    chat_cooldown: dict[str, float] = field(default_factory=dict)
 
     def touch(self):
         self.last_seen_at = time.time()
@@ -88,6 +99,15 @@ class WebRoom:
         if len(self.log) > MAX_LOG_LINES:
             self.log = self.log[-MAX_LOG_LINES:]
 
+    def set_event(self, kind: str, data: dict[str, Any]):
+        self.event_seq += 1
+        self.last_event = {"id": self.event_seq, "type": kind, **data}
+
+    def add_chat(self, name: str, text: str):
+        self.chat.append({"name": name, "text": text, "time": int(time.time())})
+        if len(self.chat) > MAX_CHAT_LINES:
+            self.chat = self.chat[-MAX_CHAT_LINES:]
+
 
 rooms: dict[str, WebRoom] = {}
 rooms_lock = asyncio.Lock()
@@ -103,31 +123,6 @@ async def index():
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health():
     return {"ok": True, "rooms": len(rooms)}
-
-
-@app.on_event("startup")
-async def startup():
-    asyncio.create_task(self_ping_loop())
-
-
-async def self_ping_loop():
-    """每 10 分鐘 ping 自己一次，防止 Render 休眠。"""
-    await asyncio.sleep(60)  # 啟動後等 1 分鐘再開始
-    while True:
-        try:
-            port = int(os.environ.get("PORT", "8000"))
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, _do_ping, port)
-        except Exception:
-            pass
-        await asyncio.sleep(10 * 60)  # 10 分鐘一次
-
-
-def _do_ping(port: int):
-    conn = http.client.HTTPConnection("localhost", port, timeout=10)
-    conn.request("GET", "/api/health")
-    conn.getresponse()
-    conn.close()
 
 
 @app.post("/api/rooms")
@@ -180,6 +175,15 @@ async def websocket_room(websocket: WebSocket, room_code: str):
                 await websocket.send_json({"type": "error", "message": message})
                 await websocket.close(code=4409)
                 return
+            # 同一個 token 只保留一條 live 連線：踢掉舊 socket，避免廣播被同一玩家收兩次（表情會疊加）
+            old_sockets = room.connections.get(token)
+            if old_sockets:
+                for old in list(old_sockets):
+                    try:
+                        await old.close(code=4000)
+                    except Exception:
+                        pass
+                old_sockets.clear()
             room.connections.setdefault(token, set()).add(websocket)
             room.touch()
 
@@ -189,6 +193,9 @@ async def websocket_room(websocket: WebSocket, room_code: str):
             payload = await websocket.receive_json()
             result_message = await handle_action(room, token, payload)
             if isinstance(result_message, dict):
+                if result_message.get("pong"):
+                    await websocket.send_json({"type": "pong"})
+                    continue
                 if result_message.get("skip_broadcast"):
                     continue
                 result_message = result_message.get("message")
@@ -380,6 +387,7 @@ async def close_token_sockets(room: WebRoom, token: str):
 
 
 async def close_room(room: WebRoom):
+    cancel_turn_timer(room)
     await send_room_event(room, {"type": "room_closed", "message": "房间已解散。"})
     for token in list(room.connections.keys()):
         await close_token_sockets(room, token)
@@ -396,7 +404,7 @@ async def handle_action(room: WebRoom, token: str, payload: dict[str, Any]) -> s
     action = payload.get("type")
     if action == "ping":
         room.touch()
-        return None
+        return {"pong": True}
 
     async with room.lock:
         room.touch()
@@ -405,10 +413,51 @@ async def handle_action(room: WebRoom, token: str, payload: dict[str, Any]) -> s
         if not player:
             return ERROR_TEXT["not_player"]
 
+        if action == "config":
+            if not is_owner(room, token):
+                return ERROR_TEXT["owner_only"]
+            if room.session.state != GameState.WAITING:
+                return "游戏进行中不能修改设置。"
+            try:
+                secs = int(payload.get("turnSeconds"))
+            except (TypeError, ValueError):
+                return "无效的设置。"
+            if secs not in TURN_SECONDS_OPTIONS:
+                return "无效的设置。"
+            room.turn_seconds = secs
+            label = "关闭" if secs == 0 else f"{secs} 秒"
+            room.add_log(f"房主把每回合限时设为 {label}。", "system")
+            return None
+        if action == "emote":
+            emote = str(payload.get("emote") or "")
+            if emote not in EMOTES:
+                return {"skip_broadcast": True}
+            now = time.time()
+            if now - room.emote_cooldown.get(token, 0.0) < EMOTE_COOLDOWN_SECONDS:
+                return {"skip_broadcast": True}
+            room.emote_cooldown[token] = now
+            await send_room_event(
+                room,
+                {"type": "emote", "playerId": player_id, "name": player.display_name, "emote": emote},
+            )
+            return {"skip_broadcast": True}
+        if action == "chat":
+            text = " ".join(str(payload.get("text") or "").split())
+            if not text:
+                return {"skip_broadcast": True}
+            now = time.time()
+            if now - room.chat_cooldown.get(token, 0.0) < CHAT_COOLDOWN_SECONDS:
+                return {"skip_broadcast": True}
+            room.chat_cooldown[token] = now
+            room.add_chat(player.display_name, text[:CHAT_MAX_LEN])
+            return None
         if action == "start":
             if not is_owner(room, token):
                 return ERROR_TEXT["owner_only"]
-            return handle_start(room, player.display_name)
+            result = handle_start(room, player.display_name)
+            if result is None:
+                schedule_turn_timer(room)
+            return result
         if action == "kick":
             if not is_owner(room, token):
                 return ERROR_TEXT["owner_only"]
@@ -420,6 +469,7 @@ async def handle_action(room: WebRoom, token: str, payload: dict[str, Any]) -> s
             ok, message = remove_player_from_room(room, target_token, "被房主移除")
             if not ok:
                 return message
+            schedule_turn_timer(room)
             await send_to_token(room, target_token, {"type": "kicked", "message": "你已被房主移出房间。"})
             await close_token_sockets(room, target_token)
             return None
@@ -428,9 +478,11 @@ async def handle_action(room: WebRoom, token: str, payload: dict[str, Any]) -> s
             if not ok:
                 return message
             if not room.session.players:
+                cancel_turn_timer(room)
                 async with rooms_lock:
                     rooms.pop(room.code, None)
                 return {"skip_broadcast": True}
+            schedule_turn_timer(room)
             return {"skip_broadcast": False}
         if action == "disband":
             if not is_owner(room, token):
@@ -445,15 +497,27 @@ async def handle_action(room: WebRoom, token: str, payload: dict[str, Any]) -> s
                 card_indices = [int(i) for i in indices]
             except (TypeError, ValueError):
                 return ERROR_TEXT["invalid_card_index"]
-            return handle_play(room, player_id, card_indices)
+            result = handle_play(room, player_id, card_indices)
+            if result is None:
+                schedule_turn_timer(room)
+            return result
         if action == "challenge":
-            return handle_challenge(room, player_id)
+            result = handle_challenge(room, player_id)
+            if result is None:
+                schedule_turn_timer(room)
+            return result
         if action == "pass":
-            return handle_pass(room, player_id)
+            result = handle_pass(room, player_id)
+            if result is None:
+                schedule_turn_timer(room)
+            return result
         if action == "rematch":
             if not is_owner(room, token):
                 return ERROR_TEXT["owner_only"]
-            return handle_rematch(room)
+            result = handle_rematch(room)
+            if result is None:
+                schedule_turn_timer(room)
+            return result
 
     return None
 
@@ -557,6 +621,21 @@ def handle_challenge(room: WebRoom, player_id: int) -> str | None:
     if eliminated:
         room.add_log(f"{loser.display_name} 出局。", "eliminated")
 
+    room.set_event(
+        "reveal",
+        {
+            "cards": list(claim.actual_cards),
+            "claimedRank": claim.claimed_rank,
+            "claimedCount": claim.claimed_count,
+            "isLying": is_lying,
+            "claimerName": claimer.display_name if claimer else "?",
+            "challengerName": challenger.display_name if challenger else "?",
+            "loserId": loser_id,
+            "loserName": loser.display_name,
+            "eliminated": eliminated,
+        },
+    )
+
     winner = room.session.check_winner()
     if winner:
         room.phase = "ended"
@@ -611,6 +690,70 @@ def handle_rematch(room: WebRoom) -> str | None:
     return None
 
 
+def cancel_turn_timer(room: WebRoom):
+    task = room.turn_timer_task
+    room.turn_timer_task = None
+    room.turn_deadline = None
+    if task:
+        task.cancel()
+
+
+def schedule_turn_timer(room: WebRoom):
+    """Restart the per-turn countdown based on the room's current state."""
+    if room.turn_timer_task:
+        room.turn_timer_task.cancel()
+        room.turn_timer_task = None
+    room.turn_deadline = None
+
+    if room.turn_seconds <= 0:
+        return
+    if room.session.state != GameState.PLAYING:
+        return
+    if room.phase not in ("play", "challenge"):
+        return
+    if not room.session.players:
+        return
+
+    deadline = time.time() + room.turn_seconds
+    room.turn_deadline = deadline
+    room.turn_timer_task = asyncio.create_task(turn_timer_runner(room, deadline))
+
+
+async def turn_timer_runner(room: WebRoom, deadline: float):
+    """Fire the default action when the current player runs out of time."""
+    try:
+        await asyncio.sleep(max(0.0, deadline - time.time()))
+    except asyncio.CancelledError:
+        return
+
+    async with room.lock:
+        if room.turn_deadline != deadline:
+            return
+        if room.session.state != GameState.PLAYING or not room.session.players:
+            return
+        if room.phase not in ("play", "challenge"):
+            return
+
+        current = room.session.get_current_player()
+        name = current.display_name
+        if room.phase == "challenge":
+            if room.allow_pass:
+                room.add_log(f"⏱ {name} 超时，自动放行。", "system")
+                handle_pass(room, current.discord_id)
+            else:
+                room.add_log(f"⏱ {name} 超时，自动质疑。", "system")
+                handle_challenge(room, current.discord_id)
+        elif current.hand:
+            idx = secrets.randbelow(len(current.hand))
+            room.add_log(f"⏱ {name} 超时，自动打出 1 张牌。", "system")
+            handle_play(room, current.discord_id, [idx])
+        else:
+            room.session.advance_turn(skip_empty=True)
+
+    await broadcast_state(room)
+    schedule_turn_timer(room)
+
+
 async def broadcast_state(room: WebRoom):
     dead: list[tuple[str, WebSocket]] = []
     for token, sockets in list(room.connections.items()):
@@ -634,6 +777,15 @@ def build_state(room: WebRoom, token: str) -> dict[str, Any]:
     me = session.get_player(player_id) if player_id else None
     current = session.get_current_player() if session.players and session.state == GameState.PLAYING else None
     connected = room.connected_tokens()
+
+    turn_remaining_ms = None
+    if (
+        room.turn_deadline is not None
+        and room.turn_seconds > 0
+        and session.state == GameState.PLAYING
+        and room.phase in ("play", "challenge")
+    ):
+        turn_remaining_ms = max(0, int((room.turn_deadline - time.time()) * 1000))
 
     claim = None
     if session.last_claim:
@@ -683,6 +835,8 @@ def build_state(room: WebRoom, token: str) -> dict[str, Any]:
             "claim": claim,
             "currentPlayerId": current.discord_id if current else None,
             "currentPlayerName": current.display_name if current else None,
+            "turnSeconds": room.turn_seconds,
+            "turnRemainingMs": turn_remaining_ms,
         },
         "you": {
             "id": me.discord_id if me else None,
@@ -695,6 +849,8 @@ def build_state(room: WebRoom, token: str) -> dict[str, Any]:
         },
         "players": players,
         "log": room.log[-MAX_LOG_LINES:],
+        "event": room.last_event,
+        "chat": room.chat[-MAX_CHAT_LINES:],
     }
 
 
@@ -704,4 +860,5 @@ async def cleanup_rooms():
         for code, room in list(rooms.items()):
             has_connections = any(room.connections.values())
             if not has_connections and room.last_seen_at < cutoff:
+                cancel_turn_timer(room)
                 del rooms[code]
