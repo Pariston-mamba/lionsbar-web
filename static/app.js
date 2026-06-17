@@ -40,11 +40,28 @@ const els = {
   handHint: document.querySelector("#handHint"),
   handCards: document.querySelector("#handCards"),
   playCardsBtn: document.querySelector("#playCardsBtn"),
-  challengePanel: document.querySelector("#challengePanel"),
   challengeBtn: document.querySelector("#challengeBtn"),
   passBtn: document.querySelector("#passBtn"),
   logList: document.querySelector("#logList"),
   toast: document.querySelector("#toast"),
+  muteBtn: document.querySelector("#muteBtn"),
+  lobbySettings: document.querySelector("#lobbySettings"),
+  turnSecondsSeg: document.querySelector("#turnSecondsSeg"),
+  turnTimer: document.querySelector("#turnTimer"),
+  turnTimerNum: document.querySelector("#turnTimerNum"),
+  actionBar: document.querySelector("#actionBar"),
+  emoteToggle: document.querySelector("#emoteToggle"),
+  emotePopover: document.querySelector("#emotePopover"),
+  emoteLayer: document.querySelector("#emoteLayer"),
+  chatFloatLayer: document.querySelector("#chatFloatLayer"),
+  chatToggle: document.querySelector("#chatToggle"),
+  chatBadge: document.querySelector("#chatBadge"),
+  chatSheet: document.querySelector("#chatSheet"),
+  chatClose: document.querySelector("#chatClose"),
+  chatMsgs: document.querySelector("#chatMsgs"),
+  chatForm: document.querySelector("#chatForm"),
+  chatInput: document.querySelector("#chatInput"),
+  soloBtn: document.querySelector("#soloBtn"),
 };
 
 let ws = null;
@@ -56,11 +73,26 @@ let heartbeatTimer = null;
 let manualClose = false;
 let inviteQr = null;
 let inviteReturnFocus = null;
+let reconnectAttempts = 0;
+let lastMessageAt = 0;
+let watchdogTimer = null;
+let lastEventId = null;
+let prevState = null;
+let lastSeenChat = 0;
+let lastChatLen = null;
+let shakePid = null;
+let shakeUntil = 0;
+let audioCtx = null;
+const timerState = { endsAt: null, total: 0, mine: false };
+const EMOTES = ["😏", "🤨", "😎", "😱", "😭", "🤝", "🔥", "💀"];
 
 const storage = {
   token: "lionsbar_token",
   name: "lionsbar_name",
+  muted: "lionsbar_muted",
 };
+
+let muted = localStorage.getItem(storage.muted) === "1";
 
 function token() {
   let value = localStorage.getItem(storage.token);
@@ -83,6 +115,220 @@ function showToast(message) {
   window.clearTimeout(showToast.timer);
   showToast.timer = window.setTimeout(() => els.toast.classList.add("hidden"), 2600);
 }
+
+function ensureAudio() {
+  if (muted) return null;
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    try {
+      audioCtx = new Ctx();
+    } catch (err) {
+      audioCtx = null;
+    }
+  }
+  if (audioCtx && audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  return audioCtx;
+}
+
+function blip(freq, start, dur, type = "sine", gain = 0.08) {
+  if (!audioCtx) return;
+  try {
+    const osc = audioCtx.createOscillator();
+    const env = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    osc.connect(env);
+    env.connect(audioCtx.destination);
+    const t = audioCtx.currentTime + start;
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.linearRampToValueAtTime(gain, t + 0.012);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.start(t);
+    osc.stop(t + dur + 0.03);
+  } catch (err) {}
+}
+
+function playSound(kind) {
+  if (muted || !ensureAudio()) return;
+  if (kind === "yourturn") {
+    blip(660, 0, 0.12, "triangle");
+    blip(880, 0.12, 0.16, "triangle");
+  } else if (kind === "play") {
+    blip(420, 0, 0.08, "square", 0.05);
+  } else if (kind === "lie") {
+    blip(330, 0, 0.18, "sawtooth", 0.08);
+    blip(196, 0.16, 0.34, "sawtooth", 0.09);
+  } else if (kind === "honest") {
+    blip(523, 0, 0.12, "sine");
+    blip(784, 0.12, 0.18, "sine");
+  } else if (kind === "win") {
+    [523, 659, 784, 1047].forEach((f, i) => blip(f, i * 0.12, 0.22, "triangle", 0.08));
+  } else if (kind === "pop") {
+    blip(880, 0, 0.06, "sine", 0.05);
+  }
+}
+
+function buzz(pattern) {
+  if (muted || !navigator.vibrate) return;
+  try {
+    navigator.vibrate(pattern);
+  } catch (err) {}
+}
+
+function setMute(on) {
+  muted = on;
+  localStorage.setItem(storage.muted, on ? "1" : "0");
+  els.muteBtn.textContent = on ? "🔇" : "🔊";
+  if (!on) ensureAudio();
+}
+
+function buildEmotePopover() {
+  if (els.emotePopover.dataset.ready) return;
+  EMOTES.forEach((emoji) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = emoji;
+    btn.addEventListener("click", () => {
+      send({ type: "emote", emote: emoji });
+      closeEmote();
+    });
+    els.emotePopover.append(btn);
+  });
+  els.emotePopover.dataset.ready = "1";
+}
+
+function toggleEmote() {
+  buildEmotePopover();
+  if (els.emotePopover.classList.contains("hidden")) closeChat();
+  els.emotePopover.classList.toggle("hidden");
+}
+
+function closeEmote() {
+  els.emotePopover.classList.add("hidden");
+}
+
+function renderChat(state) {
+  const chat = state.chat || [];
+  els.chatMsgs.innerHTML = "";
+  if (!chat.length) {
+    const empty = document.createElement("p");
+    empty.className = "chat-empty";
+    empty.textContent = "还没有人说话，来打个招呼吧。";
+    els.chatMsgs.append(empty);
+  } else {
+    chat.forEach((m) => {
+      const row = document.createElement("div");
+      row.className = "chat-msg" + (state.you && m.name === state.you.name ? " mine" : "");
+      const who = document.createElement("span");
+      who.className = "who";
+      who.textContent = m.name;
+      row.append(who, document.createTextNode(m.text));
+      els.chatMsgs.append(row);
+    });
+  }
+  // 抽屜關閉時，別人發的新訊息飄幾秒浮層（重連一次補很多則就不飄，避免洗版）
+  if (
+    lastChatLen !== null &&
+    chat.length > lastChatLen &&
+    chat.length - lastChatLen <= 3 &&
+    els.chatSheet.classList.contains("hidden")
+  ) {
+    chat
+      .slice(lastChatLen)
+      .filter((m) => !(state.you && m.name === state.you.name))
+      .slice(-2)
+      .forEach((m) => showChatFloat(m.name, m.text));
+  }
+  lastChatLen = chat.length;
+  if (els.chatSheet.classList.contains("hidden")) {
+    els.chatBadge.classList.toggle("hidden", chat.length <= lastSeenChat);
+  } else {
+    lastSeenChat = chat.length;
+    els.chatBadge.classList.add("hidden");
+    els.chatMsgs.scrollTop = els.chatMsgs.scrollHeight;
+  }
+}
+
+function openChat() {
+  closeEmote();
+  els.chatSheet.classList.remove("hidden");
+  lastSeenChat = (currentState && currentState.chat ? currentState.chat : []).length;
+  if (currentState) renderChat(currentState);
+  els.chatBadge.classList.add("hidden");
+}
+
+function closeChat() {
+  els.chatSheet.classList.add("hidden");
+}
+
+function toggleChat() {
+  if (els.chatSheet.classList.contains("hidden")) openChat();
+  else closeChat();
+}
+
+function sendChat() {
+  const text = els.chatInput.value.trim();
+  if (!text) return;
+  send({ type: "chat", text });
+  els.chatInput.value = "";
+}
+
+function showChatFloat(name, text) {
+  const shown = text.length > 16 ? text.slice(0, 16) + "…" : text;
+  const fly = document.createElement("div");
+  fly.className = "chat-float";
+  const who = document.createElement("span");
+  who.className = "who";
+  who.textContent = `${name}：`;
+  fly.append(who, document.createTextNode(shown));
+  els.chatFloatLayer.append(fly);
+  window.setTimeout(() => fly.remove(), 3000);
+}
+
+function showFlyingEmote(name, emoji) {
+  const fly = document.createElement("div");
+  fly.className = "emote-fly";
+  fly.style.left = `${8 + Math.random() * 72}%`;
+  const em = document.createElement("div");
+  em.className = "emoji";
+  em.textContent = emoji;
+  const who = document.createElement("div");
+  who.className = "who";
+  who.textContent = name;
+  fly.append(em, who);
+  els.emoteLayer.append(fly);
+  window.setTimeout(() => fly.remove(), 2300);
+  playSound("pop");
+}
+
+function showReveal(ev, state) {
+  // 揭牌不再彈全螢幕，改成讓掉血玩家的名條左右震動（renderPlayers 會在重發牌後續抖）
+  shakePid = ev.loserId;
+  shakeUntil = Date.now() + 700;
+  const row = els.playersList.querySelector(`[data-pid="${ev.loserId}"]`);
+  if (row) row.classList.add("hp-shake");
+
+  try {
+    playSound(ev.isLying ? "lie" : "honest");
+    if (state?.you?.id && ev.loserId === state.you.id) buzz([80, 60, 160]);
+    else buzz(40);
+  } catch (err) {}
+}
+
+function tickTimer() {
+  if (timerState.endsAt == null) return;
+  const remain = Math.max(0, timerState.endsAt - Date.now());
+  const frac = timerState.total ? remain / timerState.total : 0;
+  els.turnTimer.style.setProperty("--frac", frac.toFixed(3));
+  els.turnTimerNum.textContent = String(Math.ceil(remain / 1000));
+  els.turnTimer.classList.toggle("mine", timerState.mine);
+  els.turnTimer.classList.toggle("low", remain <= 10000);
+}
+
+window.setInterval(() => {
+  if (timerState.endsAt != null && !els.turnTimer.classList.contains("hidden")) tickTimer();
+}, 250);
 
 function openRules() {
   els.rulesModal.classList.remove("hidden");
@@ -215,13 +461,25 @@ function route() {
 function returnToHome(message = "") {
   manualClose = true;
   stopHeartbeat();
+  stopWatchdog();
   window.clearTimeout(reconnectTimer);
+  reconnectAttempts = 0;
   if (ws && ws.readyState === WebSocket.OPEN) ws.close();
   ws = null;
   currentState = null;
+  prevState = null;
+  lastEventId = null;
+  timerState.endsAt = null;
   selected.clear();
   closeManageQuietly();
   closeInviteQuietly();
+  closeEmote();
+  closeChat();
+  lastSeenChat = 0;
+  lastChatLen = null;
+  els.chatBadge.classList.add("hidden");
+  els.actionBar.classList.add("hidden");
+  els.turnTimer.classList.add("hidden");
   roomCode = "";
   history.replaceState(null, "", "/");
   route();
@@ -265,26 +523,42 @@ function connect() {
     showToast("请输入名字。");
     return;
   }
+  // 已經有連線（連線中或已連上）就不要再開一條，避免手機重複點「进入房间」開出兩條 socket
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
 
   localStorage.setItem(storage.name, name);
   manualClose = false;
   selected.clear();
+  ensureAudio();
   setStatus("连接中", "");
 
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   ws = new WebSocket(`${protocol}//${location.host}/ws/${roomCode}`);
 
   ws.addEventListener("open", () => {
+    reconnectAttempts = 0;
+    lastMessageAt = Date.now();
     setStatus("已连接", "online");
     send({ type: "join", token: token(), name });
     startHeartbeat();
+    startWatchdog();
   });
 
   ws.addEventListener("message", (event) => {
-    const msg = JSON.parse(event.data);
+    lastMessageAt = Date.now();
+    let msg;
+    try {
+      msg = JSON.parse(event.data);
+    } catch (err) {
+      return;
+    }
     if (msg.type === "state") {
       currentState = msg;
       render(msg);
+    } else if (msg.type === "emote") {
+      showFlyingEmote(msg.name, msg.emote);
+    } else if (msg.type === "pong") {
+      // keep-alive acknowledged
     } else if (msg.type === "room_closed") {
       returnToHome(msg.message || "房间已解散。");
     } else if (msg.type === "kicked") {
@@ -296,8 +570,10 @@ function connect() {
 
   ws.addEventListener("close", () => {
     stopHeartbeat();
+    stopWatchdog();
+    if (manualClose) return;
     setStatus("重连中", "offline");
-    if (!manualClose) scheduleReconnect();
+    scheduleReconnect();
   });
 
   ws.addEventListener("error", () => {
@@ -307,9 +583,30 @@ function connect() {
 
 function scheduleReconnect() {
   window.clearTimeout(reconnectTimer);
+  reconnectAttempts += 1;
+  const base = Math.min(800 * 2 ** (reconnectAttempts - 1), 12000);
+  const delay = base + Math.floor(Math.random() * 400);
+  setStatus(`重连中 (${reconnectAttempts})`, "offline");
   reconnectTimer = window.setTimeout(() => {
     if (roomCode && localStorage.getItem(storage.name)) connect();
-  }, 1600);
+  }, delay);
+}
+
+function startWatchdog() {
+  stopWatchdog();
+  watchdogTimer = window.setInterval(() => {
+    if (manualClose || !ws) return;
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (Date.now() - lastMessageAt > 30000) {
+      try {
+        ws.close();
+      } catch (err) {}
+    }
+  }, 5000);
+}
+
+function stopWatchdog() {
+  window.clearInterval(watchdogTimer);
 }
 
 function startHeartbeat() {
@@ -336,14 +633,22 @@ function render(state) {
   els.tableRank.textContent = state.room.tableRank;
   els.tableCount.textContent = state.room.tableCount;
 
+  els.actionBar.classList.remove("hidden");
+
   renderTurn(state);
   renderClaim(state);
   renderPlayers(state);
   renderHand(state);
   renderActions(state);
   renderTopActions(state);
+  renderLobbySettings(state);
+  renderTimerState(state);
   renderLog(state);
+  renderChat(state);
+  renderEvent(state);
+  handleStateSounds(prevState, state);
   if (!els.manageModal.classList.contains("hidden")) renderManage(state);
+  prevState = state;
 }
 
 function renderTopActions(state) {
@@ -384,6 +689,8 @@ function renderPlayers(state) {
   state.players.forEach((player) => {
     const row = document.createElement("div");
     row.className = `player ${player.current ? "current" : ""} ${player.alive ? "" : "dead"}`;
+    row.dataset.pid = player.id;
+    if (player.id === shakePid && Date.now() < shakeUntil) row.classList.add("hp-shake");
 
     const left = document.createElement("div");
     const name = document.createElement("div");
@@ -451,8 +758,65 @@ function renderActions(state) {
   els.rematchBtn.classList.toggle("hidden", room.state !== "ended" || !state.you.isOwner);
 
   const canChallenge = room.state === "playing" && room.phase === "challenge" && state.you.current && state.you.alive;
-  els.challengePanel.classList.toggle("hidden", !canChallenge);
-  els.passBtn.classList.toggle("hidden", !room.allowPass);
+  els.challengeBtn.classList.toggle("hidden", !canChallenge);
+  els.passBtn.classList.toggle("hidden", !(canChallenge && room.allowPass));
+}
+
+function renderLobbySettings(state) {
+  const show = state.room.state === "waiting" && state.you.isOwner;
+  els.lobbySettings.classList.toggle("hidden", !show);
+  if (!show) return;
+  const secs = state.room.turnSeconds || 0;
+  els.turnSecondsSeg.querySelectorAll(".seg-btn").forEach((btn) => {
+    btn.classList.toggle("active", Number(btn.dataset.secs) === secs);
+  });
+}
+
+function renderTimerState(state) {
+  const ms = state.room.turnRemainingMs;
+  if (ms == null) {
+    timerState.endsAt = null;
+    els.turnTimer.classList.add("hidden");
+    return;
+  }
+  timerState.endsAt = Date.now() + ms;
+  timerState.total = (state.room.turnSeconds || 30) * 1000;
+  timerState.mine = Boolean(state.you.current && state.you.alive);
+  els.turnTimer.classList.remove("hidden");
+  tickTimer();
+}
+
+function renderEvent(state) {
+  const ev = state.event;
+  if (!ev) return;
+  if (lastEventId === null) {
+    lastEventId = ev.id;
+    return;
+  }
+  if (ev.id <= lastEventId) return;
+  lastEventId = ev.id;
+  if (ev.type === "reveal") showReveal(ev, state);
+}
+
+function handleStateSounds(prev, cur) {
+  if (!prev) return;
+  const wasMyTurn = Boolean(prev.you && prev.you.current && prev.room && prev.room.state === "playing");
+  const isMyTurn = Boolean(cur.you && cur.you.current && cur.room.state === "playing");
+  if (isMyTurn && !wasMyTurn) {
+    playSound("yourturn");
+    buzz(120);
+  }
+
+  const before = prev.room && prev.room.claim;
+  const now = cur.room && cur.room.claim;
+  const claimChanged =
+    now && (!before || before.playerId !== now.playerId || before.claimedCount !== now.claimedCount);
+  if (claimChanged && cur.you && now.playerId !== cur.you.id) playSound("play");
+
+  if (cur.room.state === "ended" && prev.room && prev.room.state !== "ended") {
+    playSound("win");
+    if (cur.room.winner && cur.you && cur.you.name === cur.room.winner) buzz([60, 40, 60, 40, 140]);
+  }
 }
 
 function renderManage(state) {
@@ -556,14 +920,57 @@ els.nameInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") connect();
 });
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !els.inviteModal.classList.contains("hidden")) {
+  if (event.key !== "Escape") return;
+  if (!els.emotePopover.classList.contains("hidden")) {
+    closeEmote();
+  } else if (!els.chatSheet.classList.contains("hidden")) {
+    closeChat();
+  } else if (!els.inviteModal.classList.contains("hidden")) {
     closeInvite();
-  } else if (event.key === "Escape" && !els.rulesModal.classList.contains("hidden")) {
+  } else if (!els.rulesModal.classList.contains("hidden")) {
     closeRules();
-  } else if (event.key === "Escape" && !els.manageModal.classList.contains("hidden")) {
+  } else if (!els.manageModal.classList.contains("hidden")) {
     closeManage();
   }
 });
 
+els.muteBtn.addEventListener("click", () => setMute(!muted));
+els.soloBtn.addEventListener("click", () => {
+  location.href = "/static/lionsbar-demo.html";
+});
+els.emoteToggle.addEventListener("click", (event) => {
+  event.stopPropagation();
+  toggleEmote();
+});
+els.chatToggle.addEventListener("click", (event) => {
+  event.stopPropagation();
+  toggleChat();
+});
+els.chatClose.addEventListener("click", closeChat);
+els.chatForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  sendChat();
+});
+els.turnSecondsSeg.querySelectorAll(".seg-btn").forEach((btn) => {
+  btn.addEventListener("click", () => send({ type: "config", turnSeconds: Number(btn.dataset.secs) }));
+});
+document.addEventListener("click", (event) => {
+  if (els.emotePopover.classList.contains("hidden")) return;
+  if (els.emotePopover.contains(event.target) || event.target === els.emoteToggle) return;
+  closeEmote();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  if (manualClose || !roomCode || !localStorage.getItem(storage.name)) return;
+  if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+    reconnectAttempts = 0;
+    window.clearTimeout(reconnectTimer);
+    connect();
+  } else if (ws.readyState === WebSocket.OPEN) {
+    send({ type: "ping" });
+  }
+});
+
+setMute(muted);
 route();
 setStatus("未连接");

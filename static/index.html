@@ -10,7 +10,7 @@
     <meta property="og:image" content="https://lionsbar-web.onrender.com/static/lion.png" />
     <meta property="og:url" content="https://lionsbar-web.onrender.com" />
     <meta property="og:type" content="website" />
-    <link rel="stylesheet" href="/static/style.css?v=20260603-2" />
+    <link rel="stylesheet" href="/static/style.css?v=20260617-1" />
   </head>
   <body>
     <main class="app">
@@ -21,6 +21,7 @@
         </div>
         <div class="top-actions">
           <button class="small ghost hidden" id="homeInviteBtn" type="button">邀请</button>
+          <button class="small ghost" id="muteBtn" type="button" aria-label="声音开关">🔊</button>
           <button class="small ghost" id="rulesBtn" type="button">规则</button>
           <button class="small ghost hidden" id="manageBtn" type="button">管理</button>
           <button class="small danger hidden" id="leaveRoomBtn" type="button">退出</button>
@@ -36,6 +37,7 @@
             <input id="roomInput" maxlength="6" autocomplete="off" placeholder="例如 AB12" />
           </label>
           <button id="joinByCodeBtn">加入房间</button>
+          <button class="ghost" id="soloBtn" type="button">和机器人玩（单机试玩）</button>
         </div>
       </section>
       <section class="panel hidden" id="joinPanel">
@@ -74,8 +76,24 @@
               <div class="rank secondary" id="tableCount">0</div>
             </div>
           </div>
-          <p class="turn" id="turnText">等待玩家加入。</p>
+          <div class="turn-row">
+            <p class="turn" id="turnText">等待玩家加入。</p>
+            <div class="turn-timer hidden" id="turnTimer"><span id="turnTimerNum">0</span></div>
+          </div>
           <div class="claim hidden" id="claimBox"></div>
+        </section>
+        <section class="panel hidden" id="lobbySettings">
+          <div class="setting-row">
+            <div>
+              <span class="muted">每回合限时</span>
+              <p class="setting-hint">时间到会自动出牌 / 放行，由房主决定</p>
+            </div>
+            <div class="seg" id="turnSecondsSeg" role="group" aria-label="每回合限时">
+              <button class="seg-btn" data-secs="0" type="button">关闭</button>
+              <button class="seg-btn" data-secs="30" type="button">30秒</button>
+              <button class="seg-btn" data-secs="60" type="button">60秒</button>
+            </div>
+          </div>
         </section>
         <section class="panel">
           <div class="section-title">
@@ -91,14 +109,6 @@
             <span class="muted" id="handHint">最多出 3 张</span>
           </div>
           <div class="hand" id="handCards"></div>
-          <button class="primary hidden" id="playCardsBtn">出牌</button>
-        </section>
-        <section class="panel hidden" id="challengePanel">
-          <h2>是否质疑？</h2>
-          <div class="actions">
-            <button class="danger" id="challengeBtn">质疑</button>
-            <button id="passBtn">放行并出牌</button>
-          </div>
         </section>
         <section class="panel">
           <h2>记录</h2>
@@ -106,6 +116,29 @@
         </section>
       </section>
     </main>
+    <div class="actionbar hidden" id="actionBar">
+      <button class="ghost emote-toggle" id="emoteToggle" type="button" aria-label="发送表情">😀</button>
+      <button class="ghost emote-toggle" id="chatToggle" type="button" aria-label="聊天">💬<span class="chat-badge hidden" id="chatBadge"></span></button>
+      <div class="actionbar-main" id="actionMain">
+        <button class="danger hidden" id="challengeBtn" type="button">质疑</button>
+        <button class="ghost hidden" id="passBtn" type="button">放行并出牌</button>
+        <button class="primary hidden" id="playCardsBtn" type="button">出牌</button>
+      </div>
+    </div>
+    <div class="emote-popover hidden" id="emotePopover"></div>
+    <div class="emote-layer" id="emoteLayer" aria-hidden="true"></div>
+    <div class="chat-float-layer" id="chatFloatLayer" aria-hidden="true"></div>
+    <div class="chat-sheet hidden" id="chatSheet">
+      <div class="chat-head">
+        <h2>聊天</h2>
+        <button class="small" id="chatClose" type="button">关闭</button>
+      </div>
+      <div class="chat-msgs" id="chatMsgs"></div>
+      <form class="chat-input" id="chatForm">
+        <input id="chatInput" maxlength="200" autocomplete="off" placeholder="说点什么…" />
+        <button class="primary" id="chatSend" type="submit">发送</button>
+      </form>
+    </div>
     <div class="modal hidden" id="rulesModal" aria-hidden="true">
       <div class="modal-backdrop" id="rulesBackdrop"></div>
       <section class="rules-dialog" role="dialog" aria-modal="true" aria-labelledby="rulesTitle">
@@ -211,6 +244,6 @@
     </div>
     <div class="toast hidden" id="toast"></div>
     <script src="https://cdn.jsdelivr.net/npm/qr-code-styling@1.9.2/lib/qr-code-styling.js"></script>
-    <script src="/static/app.js?v=20260603-2" defer></script>
+    <script src="/static/app.js?v=20260617-1" defer></script>
   </body>
 </html>

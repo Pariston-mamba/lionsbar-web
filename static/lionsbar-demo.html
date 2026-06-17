@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>狮子酒吧 · 本地试玩</title>
+    <link rel="stylesheet" href="style.css?v=demo-20260617-1" />
+    <style>
+      /* demo-only banner */
+      .demo-note {
+        margin-bottom: 12px;
+        padding: 8px 12px;
+        border: 1px dashed var(--accent);
+        border-radius: 8px;
+        background: #edf7f5;
+        color: #134e4a;
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1.5;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Lionsbar · Demo</p>
+          <h1>狮子酒吧</h1>
+        </div>
+        <div class="top-actions">
+          <button class="small ghost" id="muteBtn" type="button" aria-label="声音开关">🔊</button>
+          <button class="small" id="restartBtn" type="button">重开</button>
+          <button class="small danger" id="exitBtn" type="button">退出</button>
+          <div class="status online" id="connectionStatus">本地试玩</div>
+        </div>
+      </header>
+
+      <section class="game" id="gamePanel">
+        <p class="demo-note">本地试玩版（无需联机）：你和 3 个机器人对战，用来感受揭牌动画、表情、计时环和音效。联机 / 重连请部署到 Render 后用手机测。</p>
+
+        <section class="panel">
+          <div class="round-grid">
+            <div>
+              <span class="muted">桌面牌</span>
+              <div class="rank" id="tableRank">A</div>
+            </div>
+            <div>
+              <span class="muted">桌上牌数</span>
+              <div class="rank secondary" id="tableCount">0</div>
+            </div>
+          </div>
+          <div class="turn-row">
+            <p class="turn" id="turnText">准备开始。</p>
+            <div class="turn-timer hidden" id="turnTimer"><span id="turnTimerNum">0</span></div>
+          </div>
+          <div class="claim hidden" id="claimBox"></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-title"><h2>玩家</h2></div>
+          <div class="players" id="playersList"></div>
+        </section>
+
+        <section class="panel" id="handPanel">
+          <div class="section-title">
+            <h2>你的手牌</h2>
+            <span class="muted" id="handHint">最多出 3 张</span>
+          </div>
+          <div class="hand" id="handCards"></div>
+        </section>
+
+        <section class="panel">
+          <h2>记录</h2>
+          <div class="log" id="logList"></div>
+        </section>
+      </section>
+    </main>
+
+    <div class="actionbar hidden" id="actionBar">
+      <button class="ghost emote-toggle" id="emoteToggle" type="button" aria-label="发送表情">😀</button>
+      <div class="actionbar-main" id="actionMain">
+        <button class="danger hidden" id="challengeBtn" type="button">质疑</button>
+        <button class="ghost hidden" id="passBtn" type="button">放行并出牌</button>
+        <button class="primary hidden" id="playCardsBtn" type="button">出牌</button>
+      </div>
+    </div>
+    <div class="emote-popover hidden" id="emotePopover"></div>
+    <div class="emote-layer" id="emoteLayer" aria-hidden="true"></div>
+
+    <script>
+      // ===== shared UI helpers (same look & feel as production app.js) =====
+      const $ = (id) => document.getElementById(id);
+      const els = {
+        muteBtn: $("muteBtn"), restartBtn: $("restartBtn"), exitBtn: $("exitBtn"),
+        tableRank: $("tableRank"), tableCount: $("tableCount"),
+        turnText: $("turnText"), turnTimer: $("turnTimer"), turnTimerNum: $("turnTimerNum"),
+        claimBox: $("claimBox"), playersList: $("playersList"),
+        handHint: $("handHint"), handCards: $("handCards"), logList: $("logList"),
+        actionBar: $("actionBar"), emoteToggle: $("emoteToggle"), emotePopover: $("emotePopover"),
+        emoteLayer: $("emoteLayer"),
+        challengeBtn: $("challengeBtn"), passBtn: $("passBtn"), playCardsBtn: $("playCardsBtn"),
+      };
+
+      const EMOTES = ["😏", "🤨", "😎", "😱", "😭", "🤝", "🔥", "💀"];
+      let audioCtx = null;
+      let muted = localStorage.getItem("lionsbar_muted") === "1";
+      const timerState = { endsAt: null, total: 0, mine: false };
+      let shakePid = null, shakeUntil = 0;
+
+      function ensureAudio() {
+        if (muted) return null;
+        if (!audioCtx) {
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          if (!Ctx) return null;
+          try { audioCtx = new Ctx(); } catch (e) { audioCtx = null; }
+        }
+        if (audioCtx && audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+        return audioCtx;
+      }
+      function blip(freq, start, dur, type = "sine", gain = 0.08) {
+        if (!audioCtx) return;
+        try {
+          const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+          o.type = type; o.frequency.value = freq; o.connect(g); g.connect(audioCtx.destination);
+          const t = audioCtx.currentTime + start;
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.linearRampToValueAtTime(gain, t + 0.012);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+          o.start(t); o.stop(t + dur + 0.03);
+        } catch (err) {}
+      }
+      function playSound(kind) {
+        if (muted || !ensureAudio()) return;
+        if (kind === "yourturn") { blip(660, 0, 0.12, "triangle"); blip(880, 0.12, 0.16, "triangle"); }
+        else if (kind === "play") { blip(420, 0, 0.08, "square", 0.05); }
+        else if (kind === "lie") { blip(330, 0, 0.18, "sawtooth", 0.08); blip(196, 0.16, 0.34, "sawtooth", 0.09); }
+        else if (kind === "honest") { blip(523, 0, 0.12, "sine"); blip(784, 0.12, 0.18, "sine"); }
+        else if (kind === "win") { [523, 659, 784, 1047].forEach((f, i) => blip(f, i * 0.12, 0.22, "triangle", 0.08)); }
+        else if (kind === "pop") { blip(880, 0, 0.06, "sine", 0.05); }
+      }
+      function buzz(p) { if (!muted && navigator.vibrate) { try { navigator.vibrate(p); } catch (e) {} } }
+      function setMute(on) {
+        muted = on; localStorage.setItem("lionsbar_muted", on ? "1" : "0");
+        els.muteBtn.textContent = on ? "🔇" : "🔊"; if (!on) ensureAudio();
+      }
+
+      function buildEmotePopover() {
+        if (els.emotePopover.dataset.ready) return;
+        EMOTES.forEach((e) => {
+          const b = document.createElement("button");
+          b.type = "button"; b.textContent = e;
+          b.addEventListener("click", () => { floatEmote("你", e); closeEmote(); });
+          els.emotePopover.append(b);
+        });
+        els.emotePopover.dataset.ready = "1";
+      }
+      function toggleEmote() { buildEmotePopover(); els.emotePopover.classList.toggle("hidden"); }
+      function closeEmote() { els.emotePopover.classList.add("hidden"); }
+      function floatEmote(name, emoji) {
+        const fly = document.createElement("div");
+        fly.className = "emote-fly";
+        fly.style.left = (8 + Math.random() * 72) + "%";
+        const em = document.createElement("div"); em.className = "emoji"; em.textContent = emoji;
+        const who = document.createElement("div"); who.className = "who"; who.textContent = name;
+        fly.append(em, who); els.emoteLayer.append(fly);
+        setTimeout(() => fly.remove(), 2300); playSound("pop");
+      }
+
+      function showReveal(ev) {
+        // 揭牌不再彈全螢幕，改成讓掉血玩家的名條左右震動（render 重畫玩家時會套用）
+        shakePid = ev.loserId;
+        shakeUntil = Date.now() + 700;
+        try {
+          playSound(ev.isLying ? "lie" : "honest");
+          buzz(ev.loserId === 0 ? [80, 60, 160] : 40);
+        } catch (err) {}
+      }
+
+      function tickTimer() {
+        if (timerState.endsAt == null) return;
+        const remain = Math.max(0, timerState.endsAt - Date.now());
+        const frac = timerState.total ? remain / timerState.total : 0;
+        els.turnTimer.style.setProperty("--frac", frac.toFixed(3));
+        els.turnTimerNum.textContent = String(Math.ceil(remain / 1000));
+        els.turnTimer.classList.toggle("mine", timerState.mine);
+        els.turnTimer.classList.toggle("low", remain <= 10000);
+        if (remain <= 0) onTimeout();
+      }
+      setInterval(() => { if (timerState.endsAt != null && !els.turnTimer.classList.contains("hidden")) tickTimer(); }, 250);
+
+      // ===== local game engine (port of game.py, demo-sized) =====
+      const RANKS = ["A", "K", "Q"];
+      const DECK_CFG = { 2: [3, 1], 3: [4, 3], 4: [6, 2], 5: [7, 4], 6: [9, 3] };
+      const TURN_MS = 30000;
+      let players, current, phase, tableRank, tableCount, lastClaim, allowPass, winner, sel, aiTimer, turnKey;
+
+      const pick = (a) => a[Math.floor(Math.random() * a.length)];
+      function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+      function aliveIdxs() { return players.map((p, i) => i).filter((i) => players[i].alive); }
+      function nextAlive(from) { const n = players.length; for (let k = 1; k <= n; k++) { const i = (from + k) % n; if (players[i].alive) return i; } return from; }
+      function nextWithCards(from) { const n = players.length; for (let k = 1; k <= n; k++) { const i = (from + k) % n; if (players[i].alive && players[i].hand.length) return i; } return from; }
+      function buildDeck(n) { const [base, jok] = DECK_CFG[n]; const d = []; RANKS.forEach((r) => { for (let i = 0; i < base; i++) d.push(r); }); for (let i = 0; i < jok; i++) d.push("Joker"); return shuffle(d); }
+
+      let logLines = [];
+      function log(text, kind = "info") { logLines.push({ text, kind }); if (logLines.length > 22) logLines = logLines.slice(-22); }
+
+      function startGame() {
+        players = [
+          { name: "你", hp: 5, hand: [], alive: true, bot: false },
+          { name: "机器人 A", hp: 5, hand: [], alive: true, bot: true },
+          { name: "机器人 B", hp: 5, hand: [], alive: true, bot: true },
+          { name: "机器人 C", hp: 5, hand: [], alive: true, bot: true },
+        ];
+        winner = null; sel = new Set(); logLines = []; tableCount = 0;
+        log("游戏开始（本地试玩）。", "system");
+        resetRound(0, true);
+        commit();
+      }
+
+      function resetRound(starterIdx, first) {
+        lastClaim = null; tableCount = 0; tableRank = pick(RANKS);
+        const deck = buildDeck(aliveIdxs().length);
+        aliveIdxs().forEach((i) => { players[i].hand = deck.splice(0, 5); });
+        current = players[starterIdx] && players[starterIdx].alive ? starterIdx : nextAlive(starterIdx);
+        phase = "play"; allowPass = false; sel = new Set();
+        log((first ? "桌面牌 " : "新一轮，桌面牌 ") + tableRank + "，轮到 " + players[current].name + "。", "system");
+      }
+
+      function doPlay(idx, indices) {
+        const p = players[idx];
+        indices = [...new Set(indices)].sort((a, b) => a - b);
+        const actual = indices.map((i) => p.hand[i]);
+        indices.slice().sort((a, b) => b - a).forEach((i) => p.hand.splice(i, 1));
+        tableCount += actual.length;
+        lastClaim = { idx, actual, rank: tableRank, count: actual.length };
+        if (idx !== 0) playSound("play");
+        log(p.name + " 打出 " + actual.length + " 张，声称是 " + tableRank + "。", "play");
+        const others = aliveIdxs().filter((i) => i !== idx && players[i].hand.length > 0);
+        if (!others.length) { log("其他人都没有手牌，重新发牌。", "system"); resetRound(idx); return; }
+        phase = "challenge"; current = nextWithCards(idx); allowPass = true;
+        log("轮到 " + players[current].name + "：质疑或放行。", "system");
+      }
+
+      function doPass(byIdx) { phase = "play"; allowPass = false; current = byIdx; log(players[byIdx].name + " 放行，由其出牌。", "pass"); }
+
+      function doChallenge(byIdx) {
+        const claim = lastClaim;
+        const challenger = players[byIdx], claimer = players[claim.idx];
+        const isLying = claim.actual.some((c) => c !== tableRank && c !== "Joker");
+        const loserIdx = isLying ? claim.idx : byIdx;
+        const loser = players[loserIdx];
+        loser.hp -= 1; const eliminated = loser.hp <= 0;
+        if (eliminated) { loser.alive = false; loser.hand = []; }
+        log(challenger.name + " 质疑 " + claimer.name + "：翻开 " + claim.actual.join("、") + "。" + (isLying ? "质疑成功" : "质疑失败") + "，" + loser.name + " -1 HP。", "reveal");
+        if (eliminated) log(loser.name + " 出局。", "eliminated");
+        showReveal({ challengerName: challenger.name, claimerName: claimer.name, cards: claim.actual, claimedRank: claim.rank, claimedCount: claim.count, isLying, loserName: loser.name, loserId: loserIdx, eliminated });
+        const alive = aliveIdxs();
+        if (alive.length === 1) { phase = "ended"; winner = players[alive[0]].name; log("游戏结束，" + winner + " 获胜！", "winner"); setTimeout(() => playSound("win"), 600); return; }
+        const starter = loser.alive ? loserIdx : nextAlive(loserIdx);
+        resetRound(starter);
+      }
+
+      // ===== bots =====
+      function botPlay(idx) {
+        const hand = players[idx].hand, good = [], bad = [];
+        hand.forEach((c, i) => ((c === tableRank || c === "Joker") ? good : bad).push(i));
+        let chosen;
+        if (good.length) {
+          const n = Math.min(good.length, 1 + Math.floor(Math.random() * Math.min(3, good.length)));
+          chosen = good.slice(0, n);
+          if (bad.length && chosen.length < 3 && Math.random() < 0.35) chosen.push(bad[0]);
+        } else {
+          const n = 1 + Math.floor(Math.random() * Math.min(2, bad.length));
+          chosen = bad.slice(0, n);
+        }
+        doPlay(idx, chosen);
+      }
+      function botDecide(idx) {
+        const p = 0.18 + 0.12 * lastClaim.count;
+        if (Math.random() < p) doChallenge(idx); else doPass(idx);
+      }
+      function botAct() {
+        if (phase === "ended" || current === 0) return;
+        if (phase === "play") botPlay(current);
+        else if (phase === "challenge") botDecide(current);
+        if (Math.random() < 0.22) floatEmote(players[current] ? players[current].name : "", pick(EMOTES));
+        commit();
+      }
+
+      function onTimeout() {
+        if (phase === "ended" || current !== 0) return;
+        if (phase === "play") {
+          const h = players[0].hand;
+          if (h.length) { log("⏱ 你超时，自动出 1 张。", "system"); doPlay(0, [Math.floor(Math.random() * h.length)]); }
+        } else if (phase === "challenge") {
+          log("⏱ 你超时，自动放行。", "system"); doPass(0);
+        }
+        commit();
+      }
+
+      // ===== render =====
+      function commit() {
+        render();
+        clearTimeout(aiTimer);
+        if (phase !== "ended" && current !== 0) aiTimer = setTimeout(botAct, 1300);
+      }
+
+      function render() {
+        els.actionBar.classList.remove("hidden");
+        els.tableRank.textContent = tableRank;
+        els.tableCount.textContent = tableCount;
+
+        // turn text
+        if (phase === "ended") els.turnText.textContent = "游戏结束，" + winner + " 获胜。点「重开」再来一局。";
+        else if (phase === "challenge") els.turnText.textContent = "轮到 " + players[current].name + " 决定是否质疑。";
+        else els.turnText.textContent = "轮到 " + players[current].name + " 出牌，必须声称是 " + tableRank + "。";
+
+        // claim box
+        if (lastClaim) { els.claimBox.classList.remove("hidden"); els.claimBox.textContent = players[lastClaim.idx].name + " 刚打出 " + lastClaim.count + " 张，声称是 " + lastClaim.rank + "。"; }
+        else { els.claimBox.classList.add("hidden"); }
+
+        // timer
+        const active = phase === "play" || phase === "challenge";
+        const key = current + ":" + phase;
+        if (active) {
+          if (key !== turnKey) {
+            turnKey = key;
+            timerState.endsAt = Date.now() + TURN_MS;
+            if (current === 0) { playSound("yourturn"); buzz(120); }
+          }
+          timerState.total = TURN_MS; timerState.mine = current === 0;
+          els.turnTimer.classList.remove("hidden"); tickTimer();
+        } else { turnKey = null; timerState.endsAt = null; els.turnTimer.classList.add("hidden"); }
+
+        // players
+        els.playersList.innerHTML = "";
+        players.forEach((pl, i) => {
+          const row = document.createElement("div");
+          row.className = "player " + (i === current && phase !== "ended" ? "current " : "") + (pl.alive ? "" : "dead");
+          if (i === shakePid && Date.now() < shakeUntil) row.classList.add("hp-shake");
+          const left = document.createElement("div");
+          const nm = document.createElement("div"); nm.className = "player-name"; nm.textContent = pl.name + (i === 0 ? "（你）" : "");
+          const meta = document.createElement("div"); meta.className = "player-meta";
+          meta.textContent = (pl.alive ? pl.hand.length + " 张手牌" : "已出局");
+          left.append(nm, meta);
+          const hearts = document.createElement("div"); hearts.className = "hearts";
+          hearts.textContent = "♥".repeat(Math.max(pl.hp, 0)) + "♡".repeat(Math.max(5 - pl.hp, 0));
+          row.append(left, hearts); els.playersList.append(row);
+        });
+
+        // hand
+        const canPlay = phase === "play" && current === 0 && players[0].alive;
+        els.handHint.textContent = canPlay ? "选择 1-3 张" : "只有你能看到";
+        els.handCards.innerHTML = "";
+        players[0].hand.forEach((c, i) => {
+          const b = document.createElement("button");
+          b.className = "card " + (sel.has(i) ? "selected" : ""); b.textContent = c; b.disabled = !canPlay;
+          b.addEventListener("click", () => {
+            if (sel.has(i)) sel.delete(i); else if (sel.size < 3) sel.add(i); else return;
+            render();
+          });
+          els.handCards.append(b);
+        });
+        if (!players[0].hand.length) { const e = document.createElement("p"); e.className = "muted"; e.textContent = "本轮没有手牌。"; els.handCards.append(e); }
+
+        // action bar
+        els.playCardsBtn.classList.toggle("hidden", !canPlay);
+        els.playCardsBtn.disabled = sel.size === 0;
+        const canDecide = phase === "challenge" && current === 0 && players[0].alive;
+        els.challengeBtn.classList.toggle("hidden", !canDecide);
+        els.passBtn.classList.toggle("hidden", !(canDecide && allowPass));
+
+        // log
+        els.logList.innerHTML = "";
+        logLines.slice().reverse().forEach((l) => { const d = document.createElement("div"); d.className = "log-line " + (l.kind || ""); d.textContent = l.text; els.logList.append(d); });
+      }
+
+      // ===== events =====
+      els.playCardsBtn.addEventListener("click", () => { if (!sel.size) return; const idx = [...sel].sort((a, b) => a - b); sel = new Set(); doPlay(0, idx); commit(); });
+      els.challengeBtn.addEventListener("click", () => { doChallenge(0); commit(); });
+      els.passBtn.addEventListener("click", () => { doPass(0); commit(); });
+      els.muteBtn.addEventListener("click", () => setMute(!muted));
+      els.restartBtn.addEventListener("click", () => { ensureAudio(); startGame(); });
+      els.exitBtn.addEventListener("click", () => { location.href = "/"; });
+      els.emoteToggle.addEventListener("click", (e) => { e.stopPropagation(); ensureAudio(); toggleEmote(); });
+      document.addEventListener("click", (e) => {
+        if (els.emotePopover.classList.contains("hidden")) return;
+        if (els.emotePopover.contains(e.target) || e.target === els.emoteToggle) return;
+        closeEmote();
+      });
+      window.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape") return;
+        if (!els.emotePopover.classList.contains("hidden")) closeEmote();
+      });
+
+      setMute(muted);
+      startGame();
+    </script>
+  </body>
+</html>
